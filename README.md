@@ -126,34 +126,29 @@ test asserts our encode is the exact inverse of its decode (worst round-trip err
 that the card samples a different cell than the one rendered, and no amount of shader tuning fixes
 it.
 
-### Status: partly working
+### Verified in Redot
 
-Tested against the reference shader in Redot 26.2. The atlas loads, the card selects frames by view
-angle, and after fixing the frame basis three of four test angles line up with the source mesh.
+Tested against the shader in Redot 26.2 by rendering the impostor and the source mesh from matching
+directions. At a 16x16 grid the silhouettes track. Two bugs were found and fixed on the way, neither
+visible from the atlas alone:
 
-**The bug that mattered:** each cell was being rendered with an arbitrary roll about its view axis.
-The shader builds a specific per-frame basis (`up = (0,1,0)`, `x = cross(up, z)`, `y = cross(x, z)`)
-and the renderer now transcribes it. Before the fix nothing matched; after it, most angles do.
+* **Every cell was rendered at an arbitrary roll.** The shader builds a specific per-frame basis
+  (`up = (0,1,0)`, `x = cross(up, z)`, `y = cross(x, z)`); the renderer used whatever rotation was
+  convenient. Before the fix no test angle matched, after it most did.
+* **The upstream shader collapses both poles onto one cell**, because GLSL `sign(0.0)` is zero. A
+  camera looking straight down sampled a view 90 degrees off. `godot/flowlod_impostor.gdshader`
+  fixes it.
 
-**Still wrong:** directions exactly on an axis, and the three-frame blend ghosts off-axis. Two known
-causes, neither yet fixed:
-
-* GLSL `sign(0.0)` returns 0 where Python returns +1, so for a camera exactly on an axis the shader
-  folds to a different cell than the one rendered. The verification helper now matches GLSL; the
-  renderer's behaviour at those directions is still unconfirmed.
-* The test harness is a bare quad, not the addon's impostor node, and ignores `scale` and
-  `aabb_max`. The impostor renders visibly smaller than the reference, which is harness, not atlas.
-
-Treat the impostor as unfinished. Everything else in this addon is tested against real geometry;
-this is the one feature whose end-to-end behaviour is not.
+`docs/GODOT.md` has the setup: shader, parameters, texture import settings and visibility ranges.
 
 ### Other gaps
 
-* **No ORM map.** The shader defaults that sampler to white, so output is usable, but occlusion,
-  roughness and metallic are not baked.
-* **Upstream is Godot 3.** The reference addon does not compile in Godot 4 or Redot without porting
-  (`hint_color`, `hint_albedo`, `CAMERA_MATRIX`, `ALPHA_SCISSOR` and the `1f` literal suffix all
-  changed). It is MIT, so porting is permitted, but FlowLOD does not ship a shader.
+* **No ORM map.** The shader defaults that sampler to white, so occlusion, roughness and metallic
+  are flat. Fine at the distance impostors are used.
+* **The blend reads fatter than the mesh** close up, because it unions three neighbouring
+  silhouettes. Push the impostor further out or bake a denser grid.
+* **Roll at the exact poles.** Upstream builds its frame basis two different ways in two functions
+  with different pole fallbacks; FlowLOD matches the vertex-stage one.
 
 ## Options that cost something
 
@@ -184,42 +179,24 @@ blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 
 ## Origins
 
-FlowLOD was designed and directed by **Solid State Games (TB)**, and built with Claude. The ideas
-below are TB's, and several of them overturned conclusions the measurements had apparently already
-settled.
+Designed and directed by **Solid State Games (SSG)**, built with Claude. The ideas below are SSG's,
+and each overturned a conclusion the measurements had apparently already settled.
 
-**The flow is there even in triangle soup.** The assets profile as 0% quads, and the first analysis
-concluded there was no edge flow to preserve. TB disagreed, pointing at the wireframe. He was right:
-they are quad meshes that were triangulated on export, and 86.9% of the quads come back with chords
-up to 55 edges long. That became the Tris to Quads stage.
+* **Flow.** The assets profile as 0% quads and the first analysis concluded there was no edge flow to
+  preserve; SSG disagreed, and was right, because they are quad meshes that were triangulated on
+  export and 86.9% of the quads come back.
+* **Clean up.** SSG's remark that the mesh needed merge-by-distance before anything else invalidated
+  the whole evaluation, which had been scoring against an unwelded reference and quietly favouring
+  methods that skip welding.
+* **Half-mirror.** Symmetrizing normally mirrors UVs and destroys per-side texture detail, so SSG
+  proposed cutting down the centre, keeping the sparser half, mirroring it and projecting the denser
+  side's texture onto the copy, which is now the Rebuild UVs mode and beats a plain mirror on every
+  measure.
 
-**Merge by distance before anything else.** A single remark, and it invalidated the entire
-evaluation. Structure fidelity was being scored against an unwelded reference mesh, which quietly
-biased every result toward methods that skip welding. The pod turned out to be 9,509 vertices
-welding down to 4,086.
-
-**The half-mirror pipeline.** Symmetrizing a mesh mirrors its UVs, so a model whose sides are
-unwrapped separately loses half its texture detail. TB proposed cutting down the centre, keeping the
-side with fewer vertices, mirroring it, projecting the denser side's texture onto the copy, then
-welding. That is the Rebuild UVs mode, and it beats the plain mirror on every measure: exact
-symmetry, separate UV space, fewer triangles.
-
-**Delete what did not work.** Asked whether failed approaches should be kept, TB's instinct was no.
-An audit found that with default settings the entire flow-analysis path no longer affected output.
-677 lines went.
-
-**Reading GPL projects is fine.** An earlier draft was over-cautious, implying GPL implementations
-could not even be studied. TB corrected it. Copyright covers expression, not algorithms, so reading
-an implementation and writing your own is legitimate. Only copying code or translating it line by
-line creates a derivative work.
-
-Also TB's: the panel belongs in the N sidebar, Tris to Quads should be a switch rather than a
-separate step, the assets are AI-generated rather than kitbashed (which redirected the gap analysis
-toward mesh cleanup), and the observation that the Suzanne demo images had lost the chin volume,
-which traced back to renders made with the since-deleted chord engine.
-
-The research direction was TB's too: Simplygon as the bar to measure against, plus the MDPI
-error-curve paper, TriFlow, SQuadGen and Laigter as leads to assess.
+Also SSG's: delete what did not work, reading GPL projects for ideas is legitimate, the panel belongs
+in the N sidebar, Tris to Quads should be a switch rather than a separate step, the assets are
+AI-generated rather than kitbashed, the Suzanne demo had lost its chin volume, and the research
+direction throughout.
 
 ## Prior art
 

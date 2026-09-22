@@ -7,6 +7,7 @@ No framework, no fixtures, no mocks. ponytail: the mesh IS the fixture.
 
 import math
 import os
+import re
 import sys
 
 import bmesh
@@ -444,6 +445,23 @@ def main():
         label = "full sphere" if full else "hemisphere"
         check(f"atlas encoding inverts the shader's decode ({label})", worst < 1e-5,
               f"worst round-trip error {worst:.2e}")
+
+    # ---- shipped Godot shader ---------------------------------------------------------
+    shader = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "godot", "flowlod_impostor.gdshader")
+    check("Godot 4 shader ships with the addon", os.path.exists(shader))
+    if os.path.exists(shader):
+        code = open(shader).read()
+        check("shader is ported to Godot 4",
+              "source_color" in code and "INV_VIEW_MATRIX" in code and "hint_albedo" not in code,
+              "Godot 3 hints and matrix builtins are gone")
+        # A substring test would match nonzero_sign(...); comments mention sign(0.0) too.
+        stripped = re.sub(r"//[^\n]*", "", code)
+        bare_sign = re.search(r"(?<![A-Za-z_])sign\s*\(", stripped)
+        check("shader fixes the sign(0) pole collapse",
+              "nonzero_sign" in code and bare_sign is None,
+              "both poles would otherwise map to the same atlas cell"
+              + ("" if bare_sign is None else f"; bare sign() at offset {bare_sign.start()}"))
 
     # ---- registration -----------------------------------------------------------------
     import flow_lod

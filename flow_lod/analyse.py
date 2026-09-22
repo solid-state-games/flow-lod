@@ -76,6 +76,11 @@ class Settings:
     quad_skip_ratio: float = 0.6       # already quad-dominant -> don't bother de-triangulating
     min_segment: int = 3               # tier 2: shortest chord run worth dissolving
 
+    # Protect only junctions where feature lines meet plus hard boundaries (~8% of verts), not
+    # the interior of every crease (~52%). Measured: at 52% protected, Blender's Decimate stalls
+    # at 4516 tris against a 4084 target and cannot reach any aggressive budget at all.
+    selective_protect: bool = True
+
     remark_sharp: bool = True          # re-derive sharp edges instead of transferring normals
     transfer_normals: bool = False     # real custom-normal transfer, for meshes where 2.3 fails
 
@@ -318,6 +323,29 @@ def feature_polylines(bm, edge_class: dict) -> list:
                 vert = cur.other_vert(vert)
         lines.append(line)
     return lines
+
+
+def protect_vertices(bm, edge_class: dict, settings: Settings) -> list:
+    """Vertex indices worth freezing, as a list suitable for a vertex group.
+
+    Selective by default: a vertex qualifies only if it touches a LOCKED edge (a real boundary,
+    seam or material break) or is a junction where three or more feature lines meet. The interior
+    of a crease is deliberately NOT protected -- a crease may lose vertices along its length
+    without ceasing to be a crease, and protecting them all freezes half the mesh.
+    """
+    out = []
+    for v in bm.verts:
+        incident = list(v.link_edges)
+        if any(edge_class.get(e) == LOCKED for e in incident):
+            out.append(v.index)
+            continue
+        if not settings.selective_protect:
+            if any(edge_class.get(e) == FEATURE for e in incident):
+                out.append(v.index)
+            continue
+        if sum(1 for e in incident if edge_class.get(e) == FEATURE) >= 3:
+            out.append(v.index)
+    return out
 
 
 def classify_verts(bm, edge_class: dict, settings: Settings) -> dict:

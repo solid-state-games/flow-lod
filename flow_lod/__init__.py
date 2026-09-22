@@ -80,14 +80,23 @@ class FlowLODSettings(PropertyGroup):
                     "can simplify them until this runs",
     )
     detriangulate: BoolProperty(
-        name="De-triangulate", default=True,
-        description="Recover quad topology hidden by a triangulated export",
+        name="Tris to Quads", default=True,
+        description="Recover the quad topology a triangulated export hid, preserving edge flow, "
+                    "before reducing. Measured to help at moderate budgets and hurt at "
+                    "aggressive ones, so it is a switch",
     )
     protect_seams: BoolProperty(name="Seams", default=True)
     protect_sharp: BoolProperty(name="Sharp", default=True)
     protect_materials: BoolProperty(name="Material", default=True)
     protect_boundary: BoolProperty(name="Boundary", default=True)
     protect_curvature: BoolProperty(name="Curvature", default=True)
+
+    selective_protect: BoolProperty(
+        name="Selective Protection", default=True,
+        description="Protect only junctions where feature lines meet and hard boundaries "
+                    "(about 8% of vertices) instead of every feature vertex (about 52%). "
+                    "Protecting half the mesh stops any simplifier reaching its budget",
+    )
 
     remark_sharp: BoolProperty(name="Re-mark Sharp", default=True)
     transfer_normals: BoolProperty(
@@ -124,6 +133,7 @@ def to_settings(props) -> "analyse.Settings":
         protect_materials=props.protect_materials,
         protect_boundary=props.protect_boundary,
         protect_curvature=props.protect_curvature,
+        selective_protect=props.selective_protect,
         remark_sharp=props.remark_sharp,
         transfer_normals=props.transfer_normals,
     )
@@ -202,66 +212,6 @@ class FLOWLOD_OT_analyse(Operator):
         return {"FINISHED"}
 
 
-class FLOWLOD_OT_retopo(Operator):
-    """Repair and recover quad flow without generating any LODs.
-
-    The de-triangulation stage is independently useful: a triangulated import becomes an editable
-    quad mesh again, with its original loops intact. Exposed on its own because wanting the flow
-    back is a real task that has nothing to do with LODs.
-    """
-
-    bl_idname = "flowlod.retopo"
-    bl_label = "Tris to Quads (Flow)"
-    bl_description = ("Weld split vertices and recover the quad topology a triangulated export "
-                      "hid, preserving the original edge flow. Does not generate LODs")
-    bl_options = {"REGISTER", "UNDO"}
-
-    apply_to_source: BoolProperty(
-        name="Replace Source", default=False,
-        description="Modify the selected object instead of creating a _Quads copy",
-    )
-
-    @classmethod
-    def poll(cls, context):
-        return active_mesh(context) is not None
-
-    def execute(self, context):
-        import bmesh
-        obj = active_mesh(context)
-        if obj is None:
-            self.report({"ERROR"}, "No active mesh object")
-            return {"CANCELLED"}
-        settings = to_settings(obj.flow_lod)
-
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-        before_v, before_f = len(bm.verts), len(bm.faces)
-        stats = analyse.prepare(bm, settings)
-        an = analyse.analyse(bm, settings)
-
-        if self.apply_to_source:
-            bm.to_mesh(obj.data)
-            obj.data.update()
-            target = obj
-        else:
-            me = bpy.data.meshes.new(f"{obj.name}_Quads")
-            bm.to_mesh(me)
-            target = bpy.data.objects.new(f"{obj.name}_Quads", me)
-            target.matrix_world = obj.matrix_world.copy()
-            for slot in obj.material_slots:
-                me.materials.append(slot.material)
-            (obj.users_collection[0] if obj.users_collection
-             else context.scene.collection).objects.link(target)
-        bm.free()
-
-        msg = (f"{before_v} -> {len(target.data.vertices)} verts, "
-               f"{before_f} faces -> {an.stats['quad_ratio']:.0%} quads, "
-               f"longest chord {an.stats['chord_max']}")
-        obj.flow_lod.report = msg
-        self.report({"INFO"}, msg)
-        return {"FINISHED"}
-
-
 class FLOWLOD_OT_bake(Operator):
     bl_idname = "flowlod.bake"
     bl_label = "Bake LODs"
@@ -336,8 +286,6 @@ class FLOWLOD_PT_panel(Panel):
             for chunk in props.cached_stats.split(" | "):
                 box.label(text=chunk)
 
-        layout.operator("flowlod.retopo", icon="MOD_REMESH")
-
         row = layout.row()
         row.template_list("FLOWLOD_UL_levels", "", props, "levels", props, "active", rows=3)
         col = row.column(align=True)
@@ -358,6 +306,7 @@ class FLOWLOD_PT_panel(Panel):
         out.label(text="Output")
         out.prop(props, "weld")
         out.prop(props, "detriangulate")
+        out.prop(props, "selective_protect")
         out.prop(props, "remark_sharp")
         out.prop(props, "transfer_normals")
 
@@ -377,7 +326,6 @@ _CLASSES = (
     FLOWLOD_OT_level_add,
     FLOWLOD_OT_level_remove,
     FLOWLOD_OT_analyse,
-    FLOWLOD_OT_retopo,
     FLOWLOD_OT_bake,
     FLOWLOD_UL_levels,
     FLOWLOD_PT_panel,

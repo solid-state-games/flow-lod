@@ -25,15 +25,13 @@ The panel appears in the 3D viewport sidebar: press **N**, then the **FlowLOD** 
 3. Press **Bake LODs**. Results land in a `<Name>_LODs` collection; the source is hidden, never
    modified. Re-baking replaces the previous bake rather than accumulating duplicates.
 
-### Tris to Quads, on its own
+### Tris to Quads
 
-**Tris to Quads (Flow)** runs the repair and quad-recovery stages without generating any LODs,
-producing a `<Name>_Quads` object. A triangulated import becomes an editable quad mesh again with
-its original loops intact.
+A **switch**, not a separate step. Leave it on and every bake recovers the quad topology a
+triangulated export hid before reducing; turn it off to reduce the triangles as they are.
 
-This always runs before LOD generation anyway — chords are made of quads, so without it there is no
-flow to follow and the pipeline degrades to plain error-driven collapse. It is exposed separately
-because wanting the flow back is a real task on its own.
+Measured, it helps at moderate budgets and hurts at aggressive ones (F1 88.1% vs 87.8% at 50%,
+69.1% vs 71.1% at 25%), which is exactly why it is a switch rather than a fixed stage.
 
 Headless:
 
@@ -98,14 +96,31 @@ interpolated. Blender's Decimate solves for the error-minimising position instea
 curved surface that difference is large, because no original vertex sits where the simplified
 surface should pass.
 
-Three attempts to close the gap were measured and none worked: an adaptive per-mesh feature
-threshold (76.6 vs 77.3 vs 78.0 across settings — noise), a triangle shape-quality guard (slivers
-were already only 0.2%, below Decimate's 0.8%), and driving Decimate itself with a feature vertex
-group (over-protects 52% of vertices and cannot reach the budget at all).
+Four attempts to close the gap were measured. None beat the baseline except at 50%:
 
-So use this today for **repair, tris-to-quads, and analysis**. For the reduction itself on smooth
-models, Decimate is currently better, and this README would rather say so than sell you something
-the measurements do not support.
+1. **Adaptive per-mesh feature threshold** — 76.6 / 77.3 / 78.0 across settings. Noise.
+2. **Triangle shape-quality guard** — kept, but slivers were never the problem (0.2% vs
+   Decimate's 0.8%).
+3. **Driving Decimate with all feature vertices protected** — 52% of the mesh frozen, stalls at
+   4,516 tris against a 4,084 target.
+4. **Selective protection** (junctions and hard boundaries only, 8% of vertices) — budgets now
+   reachable, and it needs `invert_vertex_group=True` because Blender's weights mean "decimate
+   here", not "protect here". Final scores against raw Decimate on the untouched source:
+
+| ratio | best FlowLOD | raw Decimate |
+|---|---|---|
+| 50% | **88.1%** | 84.4% |
+| 25% | 71.1% | **75.8%** |
+| 10% | 60.2% (misses budget) | **67.8%** |
+
+There is also an unexplained result worth recording: preprocessing that should be a no-op on an
+already-clean, already-triangulated mesh (weld at 1e-5 of bbox, triangulate zero faces) still
+diverges sharply from the raw baseline at aggressive ratios — recall 27% versus 78% at 10%. Until
+that is understood, the preprocessing is suspect at low budgets.
+
+So use this today for **repair, tris-to-quads, and analysis**, and at moderate reduction where it
+wins. For aggressive reduction on smooth models, plain Decimate is better, and this README would
+rather say so than sell you something the measurements do not support.
 
 ## What it does not do, measured
 

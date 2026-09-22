@@ -405,6 +405,27 @@ def main():
           f"{h_before} -> {len(hbm.faces)} faces")
     hbm.free()
 
+    # ---- octahedral impostor ----------------------------------------------------------
+    from flow_lod import impostor as I
+
+    for full, label in ((True, "full sphere"), (False, "hemisphere")):
+        dirs = [I.octa_direction((i + 0.5) / 8, (j + 0.5) / 8, full)
+                for i in range(8) for j in range(8)]
+        unit = max(abs(d.length - 1.0) for d in dirs)
+        zs = [d.z for d in dirs]
+        check(f"octahedral directions are unit vectors ({label})", unit < 1e-5,
+              f"max deviation {unit:.2e}")
+        if full:
+            check("full sphere covers below", min(zs) < -0.5, f"min z {min(zs):.2f}")
+        else:
+            check("hemisphere stays above the horizon", min(zs) >= -1e-6,
+                  f"min z {min(zs):.2f}")
+
+    dirs = [I.octa_direction((i + 0.5) / 6, (j + 0.5) / 6, True) for i in range(6) for j in range(6)]
+    spread = max(a.angle(b) for a in dirs for b in dirs)
+    check("full sphere directions span more than a hemisphere", spread > math.radians(150),
+          f"widest separation {math.degrees(spread):.0f} degrees")
+
     # ---- registration -----------------------------------------------------------------
     import flow_lod
     try:

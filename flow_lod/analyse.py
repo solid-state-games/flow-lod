@@ -120,6 +120,14 @@ class Settings:
     bake_normals: bool = False
     bake_resolution: int = 1024
     bake_margin: int = 8               # pixels bled outside each island, stops edge striping
+
+    # Octahedral impostor: a billboard card sampling an N x N grid of pre-rendered views. Format
+    # follows Godot-Octahedral-Impostors (MIT) rather than inventing one.
+    impostor: bool = False
+    impostor_grid: int = 16            # 16 x 16 = 256 frames, the convention's recommended value
+    impostor_resolution: int = 2048
+    impostor_full_sphere: bool = True  # ships are seen from below; foliage is not
+    impostor_dir: str = "//impostors"
     cage_factor: float = 0.02          # of the largest dimension
     ray_factor: float = 0.05
 

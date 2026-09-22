@@ -441,6 +441,26 @@ def bake(obj, settings: Settings, levels) -> list:
         report["below_floor"] = target < stats["structural_floor"]
         reports.append(report)
 
+    if settings.impostor:
+        from . import impostor as _imp
+        import os
+        directory = bpy.path.abspath(settings.impostor_dir or "//impostors")
+        try:
+            imp = _imp.bake_impostor(obj, settings, directory)
+            if imp.get("card"):
+                card = bpy.data.objects[imp["card"]]
+                for c in list(card.users_collection):
+                    c.objects.unlink(card)
+                coll.objects.link(card)
+            reports.append({
+                "name": imp.get("card") or f"{obj.name}_impostor",
+                "target": 2, "final_tris": 2, "final_verts": 4, "quad_ratio": 0.0,
+                "deepest_tier_name": "impostor", "hit_budget": True, "seconds": 0.0,
+                "impostor": imp, "below_floor": False, "symmetry": "none",
+            })
+        except Exception as ex:
+            print("[FlowLOD] impostor failed:", ex)
+
     obj.hide_set(True)
     obj.hide_render = True
     return stats, reports

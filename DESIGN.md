@@ -673,6 +673,28 @@ bakes from the original, so anything wrongly removed returns as shading detail.
 Honest measured yield after cleaning: 7.5% on the dirtiest asset, 0% on the cleanest. The earlier
 46% figure was an artifact of the wrong metric.
 
+### 10e. Octahedral impostors
+
+A billboard card sampling a grid of pre-rendered views, blending between neighbours by view angle.
+The format follows Godot-Octahedral-Impostors (MIT) so the output drops into an existing shader
+instead of needing a bespoke one.
+
+**One render, not 256.** The obvious implementation moves a camera to each of N^2 directions and
+renders. Instead the mesh is instanced across a grid, each copy rotated so the single orthographic
+camera sees it from that cell's direction. A 16x16 atlas at 2048px takes about two seconds.
+
+**Two engine traps, both found by measurement rather than reading.** EEVEE with no lamps renders
+everything black, so albedo comes from Workbench with flat lighting and texture colour. And EEVEE
+Next silently ignores `view_layer.material_override`, which made a constant red emission render
+black; the fix is object-linked material slots on the throwaway copies, which override the mesh's
+materials without touching the shared mesh.
+
+**Unfinished, and stated as such in the README.** Depth is not packed into the normal atlas, so
+there is no parallax. There is no ORM map. One corner cell rendered black in an 8x8 test while all
+four corners map to the same pole with valid rotations, so the layout and the render disagree
+somewhere. And none of it has been run against the actual Godot shader, which is the only test that
+would settle whether the cell-to-direction correspondence is right.
+
 ## 11. Scope
 
 **In, v1:** weld repair · quad recovery · feature + chord analysis · three-tier simplification ·

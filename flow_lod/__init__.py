@@ -165,6 +165,20 @@ class FlowLODSettings(PropertyGroup):
                     "source UVs, so the existing colour textures still apply unchanged",
     )
     bake_resolution: IntProperty(name="Bake Size", default=1024, min=64, max=8192)
+
+    impostor: BoolProperty(
+        name="Impostor", default=False,
+        description="Add an octahedral impostor as the final level: a two-triangle card sampling "
+                    "a grid of pre-rendered views. Format follows Godot-Octahedral-Impostors",
+    )
+    impostor_grid: IntProperty(name="Frames", default=16, min=2, max=32)
+    impostor_resolution: IntProperty(name="Atlas Size", default=2048, min=256, max=8192)
+    impostor_full_sphere: BoolProperty(
+        name="Full Sphere", default=True,
+        description="Cover every angle including below. Turn off for foliage, which never needs "
+                    "views from underneath and gains side resolution by skipping them",
+    )
+    impostor_dir: StringProperty(name="Atlas Folder", default="//impostors", subtype="DIR_PATH")
     bake_margin: IntProperty(
         name="Bake Margin", default=8, min=0, max=64,
         description="Pixels bled outside each UV island. Too low and island edges show striping",
@@ -208,6 +222,11 @@ def to_settings(props) -> "analyse.Settings":
         bake_normals=props.bake_normals,
         bake_resolution=props.bake_resolution,
         bake_margin=props.bake_margin,
+        impostor=props.impostor,
+        impostor_grid=props.impostor_grid,
+        impostor_resolution=props.impostor_resolution,
+        impostor_full_sphere=props.impostor_full_sphere,
+        impostor_dir=props.impostor_dir,
         protect_weight=props.protect_weight,
         remark_sharp=props.remark_sharp,
         transfer_normals=props.transfer_normals,
@@ -399,6 +418,13 @@ class FLOWLOD_PT_panel(Panel):
             if props.symmetrize_mode == "REBUILD" and not props.bake_normals:
                 out.label(text="Rebuild changes UVs: enable Bake Normal Map", icon="ERROR")
         out.prop(props, "bake_normals")
+        out.prop(props, "impostor")
+        if props.impostor:
+            row = out.row(align=True)
+            row.prop(props, "impostor_grid")
+            row.prop(props, "impostor_resolution")
+            out.prop(props, "impostor_full_sphere")
+            out.prop(props, "impostor_dir")
         if props.bake_normals:
             row = out.row(align=True)
             row.prop(props, "bake_resolution")

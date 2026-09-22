@@ -138,7 +138,8 @@ def collapse_chords(bm, settings: Settings, target: int, whole_only: bool) -> di
     whole_only=False is tier 2 (Daniels, Silva & Cohen 2009): collapse the cheap contiguous run and
     stop before the feature. This is where most structured reduction happens.
     """
-    feat_rad = math.radians(settings.feature_angle)
+    from .analyse import resolve_feature_angle
+    feat_rad = math.radians(resolve_feature_angle(bm, settings))
     collapsed = 0
     rounds = 0
 
@@ -331,8 +332,30 @@ def _legal_collapse(v0, v1, vert_class, edge_class, e, constrained: bool) -> boo
     return (n0 & n1) == opposite
 
 
+_SQRT3_4 = 4.0 * 1.7320508075688772
+MIN_QUALITY = 0.06
+
+
+def _tri_quality(p0, p1, p2) -> float:
+    """Normalised triangle shape quality: 1.0 is equilateral, 0.0 is a degenerate sliver.
+
+    q = 4*sqrt(3)*area / (a^2 + b^2 + c^2). Quadric error alone is happy to produce needles --
+    a sliver can sit exactly on the original surface and cost nothing -- so shape has to be
+    checked separately from error. This is what stops the long thin triangles that span across
+    panel lines.
+    """
+    a = (p1 - p0).length_squared
+    b = (p2 - p1).length_squared
+    c = (p0 - p2).length_squared
+    denom = a + b + c
+    if denom < 1e-24:
+        return 0.0
+    area = (p1 - p0).cross(p2 - p0).length * 0.5
+    return _SQRT3_4 * area / denom
+
+
 def _flips_normal(v0, v1) -> bool:
-    """Would moving v0 onto v1 invert or degenerate any face that survives?"""
+    """Would moving v0 onto v1 invert, degenerate or sliver any face that survives?"""
     for f in v0.link_faces:
         if v1 in f.verts:
             continue                       # this face disappears in the collapse
@@ -345,6 +368,16 @@ def _flips_normal(v0, v1) -> bool:
             return True
         if before.normalized().dot(after.normalized()) < 0.0:
             return True
+
+        if len(pts) == 3:
+            q_after = _tri_quality(pts[0], pts[1], pts[2])
+            if q_after < MIN_QUALITY:
+                old_pts = [v.co for v in f.verts]
+                q_before = _tri_quality(old_pts[0], old_pts[1], old_pts[2])
+                # Allow it only if the face was already this bad -- otherwise a mesh that starts
+                # out slivery could never be simplified at all.
+                if q_after < q_before:
+                    return True
     return False
 
 

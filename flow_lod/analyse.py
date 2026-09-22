@@ -34,11 +34,20 @@ class Settings:
     weld_factor: float = 1e-5          # relative to bounding-box diagonal
     detriangulate: bool = True
 
-    # ponytail: 70, not 25. Measured dihedral histogram on the reference hulls is bimodal with
-    # 1384/6339 edges above 80deg; at 25deg, 62% of edges classify as features and nothing can
-    # move. A sweep at matched triangle count put structure-fidelity F1 at 83.1% (50deg),
-    # 85.3% (70deg), 82.4% (90deg).
-    feature_angle: float = 70.0
+    # A FIXED angle cannot serve two asset classes. Measured, share of edges above a threshold:
+    #
+    #                     >=30deg  >=50deg  >=70deg
+    #   faceted hull        ~60%     42%      31%
+    #   smooth hull          22%     14%       6%
+    #
+    # 70deg protects 31% of the faceted hull and 6% of the smooth one -- on the latter the
+    # simplifier runs essentially unconstrained and produces slivers. So the threshold is derived
+    # from each mesh's own distribution by default; feature_angle is only the manual override.
+    adaptive_features: bool = True
+    feature_percentile: float = 25.0   # protect the sharpest quarter of edges
+    feature_angle_min: float = 15.0    # clamp, so a flat mesh does not protect noise
+    feature_angle_max: float = 80.0    # and a faceted one does not freeze solid
+    feature_angle: float = 70.0        # used when adaptive_features is off
 
     # corner_angle barely moves the result (F1 83.1% at 45deg vs 83.8% at 180deg), so it is wide
     # by default and exists as an escape hatch rather than a tuning knob.
@@ -213,6 +222,26 @@ def _uv_discontinuous(edge, uv_layer) -> bool:
     return False
 
 
+def resolve_feature_angle(bm, settings: Settings) -> float:
+    """The dihedral threshold to use for THIS mesh, in degrees.
+
+    Adaptive by default: take the angle at the given percentile of the mesh's own manifold-edge
+    dihedral distribution, clamped. A faceted hull lands near 55deg and a smooth one near 27deg,
+    which is what each actually needs -- a single fixed number serves neither.
+    """
+    if not settings.adaptive_features:
+        return settings.feature_angle
+
+    angles = [math.degrees(e.calc_face_angle(0.0))
+              for e in bm.edges if len(e.link_faces) == 2]
+    if not angles:
+        return settings.feature_angle
+    angles.sort()
+    idx = int(len(angles) * (1.0 - settings.feature_percentile / 100.0))
+    idx = min(max(idx, 0), len(angles) - 1)
+    return min(max(angles[idx], settings.feature_angle_min), settings.feature_angle_max)
+
+
 def classify_edges(bm, settings: Settings) -> dict:
     """LOCKED / FEATURE / FREE per edge.
 
@@ -222,7 +251,7 @@ def classify_edges(bm, settings: Settings) -> dict:
     uv_layer = bm.loops.layers.uv.active
     crease = bm.edges.layers.float.get("crease_edge")
     bevel = bm.edges.layers.float.get("bevel_weight_edge")
-    feat_rad = math.radians(settings.feature_angle)
+    feat_rad = math.radians(resolve_feature_angle(bm, settings))
 
     out = {}
     for e in bm.edges:

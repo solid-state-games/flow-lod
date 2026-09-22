@@ -11,7 +11,7 @@ reduces along that structure, and tells you honestly when a budget is impossible
 ## Install
 
 Copy `flow_lod/` into your Blender addons directory, or zip it and install as an extension.
-The panel appears at **Properties → Object → FlowLOD**.
+The panel appears in the 3D viewport sidebar: press **N**, then the **FlowLOD** tab.
 
 ## Use
 
@@ -79,6 +79,33 @@ shape heuristics recover only 69.4% and fragment the flow.
 **Honest reporting.** The analyser computes a structural floor from the mesh's own hard edges and
 flags levels below it *before* baking. On the reference asset that floor is ~1,500 triangles, so a 611
 triangle level is flagged as unreachable rather than silently producing mush.
+
+## Honest status
+
+**The tris-to-quads recovery and the analysis are the parts that work.** The LOD generation
+currently loses to Blender's own Decimate modifier on smooth hulls, and by a wide margin.
+
+Measured on a smooth hard-surface hull, 8,168 tris, structure-fidelity F1 at matched counts:
+
+| | 50% budget | 25% budget |
+|---|---|---|
+| FlowLOD | 76.6% | 61.6% |
+| **Blender Decimate** | **84.4%** | **75.8%** |
+
+The likely cause is placement. FlowLOD uses **half-edge collapse** — the surviving vertex must be
+one of the two originals — which was chosen so UVs and colours are inherited rather than
+interpolated. Blender's Decimate solves for the error-minimising position instead. On a smooth
+curved surface that difference is large, because no original vertex sits where the simplified
+surface should pass.
+
+Three attempts to close the gap were measured and none worked: an adaptive per-mesh feature
+threshold (76.6 vs 77.3 vs 78.0 across settings — noise), a triangle shape-quality guard (slivers
+were already only 0.2%, below Decimate's 0.8%), and driving Decimate itself with a feature vertex
+group (over-protects 52% of vertices and cannot reach the budget at all).
+
+So use this today for **repair, tris-to-quads, and analysis**. For the reduction itself on smooth
+models, Decimate is currently better, and this README would rather say so than sell you something
+the measurements do not support.
 
 ## What it does not do, measured
 

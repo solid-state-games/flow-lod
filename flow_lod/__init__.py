@@ -9,7 +9,7 @@ bl_info = {
     "author": "FlowLOD contributors",
     "version": (0, 1, 0),
     "blender": (4, 2, 0),
-    "location": "Properties > Object > FlowLOD",
+    "location": "View3D > Sidebar (N) > FlowLOD",
     "description": "Flow-preserving LOD generation with per-level polygon budgets",
     "doc_url": "https://github.com/",
     "category": "Object",
@@ -309,11 +309,13 @@ class FLOWLOD_UL_levels(UIList):
 
 
 class FLOWLOD_PT_panel(Panel):
+    """Lives in the 3D viewport sidebar (N panel), where mesh work actually happens."""
+
     bl_label = "FlowLOD"
     bl_idname = "FLOWLOD_PT_panel"
-    bl_space_type = "PROPERTIES"
-    bl_region_type = "WINDOW"
-    bl_context = "object"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "FlowLOD"
 
     @classmethod
     def poll(cls, context):

@@ -350,6 +350,48 @@ So the defaults split the difference honestly: chord collapse is **off for trian
 and **on for genuinely quad-modelled assets**, with `Always` and `Never` available. It is also
 **17× faster** (0.2s vs 3.5s on the reference asset), which decides it for CLI batch work.
 
+### 7.6 Where this loses, and why
+
+A second reference hull — smooth rather than faceted, 8,168 tris, already a perfect closed manifold
+(4,086 verts, zero open, zero non-manifold, so the repair stage is a no-op) — has a completely
+different dihedral distribution:
+
+| | ≥30° | ≥50° | ≥70° |
+|---|---|---|---|
+| faceted hull | ~60% | 42% | 31% |
+| smooth hull | 22% | 14% | 6% |
+
+A fixed 70° threshold protects 6% of the smooth hull, so the simplifier runs essentially
+unconstrained. That motivated the adaptive threshold in §6.1 — which resolves to 40° here and 75°
+on the faceted hull, correctly, **and changed the output almost not at all**: F1 76.6% adaptive vs
+77.3% fixed-70 vs 78.0% fixed-30. Within noise.
+
+Structure-fidelity F1 at matched triangle counts on the smooth hull:
+
+| | 50% | 25% |
+|---|---|---|
+| FlowLOD | 76.6% | 61.6% |
+| Blender Decimate | **84.4%** | **75.8%** |
+
+**The dominant factor is almost certainly vertex placement, not feature classification.** §7.3 chose
+half-edge collapse so attributes are inherited rather than interpolated — a real benefit that
+removes a class of UV bugs. The cost was not appreciated at the time: on a smooth curved surface,
+neither endpoint of a collapsed edge sits where the simplified surface should pass, so every
+collapse leaves error that optimal-position placement would not.
+
+Other things measured and rejected as fixes:
+
+- **Shape-quality guard** — added, and correct to keep, but not the problem: FlowLOD already
+  produced 0.2% slivers against Decimate's 0.8%.
+- **Driving Decimate with a feature vertex group** — the obvious "use the better engine" move. It
+  fails because the classification marks 52% of vertices as protected, so the modifier stalls at
+  4,516 tris against a 4,084 target and fidelity drops to F1 67.6%.
+
+The unresolved work is therefore: implement optimal-position placement with attribute
+interpolation, or make the protection far more selective so a vertex-group-driven Decimate can
+actually reach a budget. Until one of those lands, this tool's reduction is not competitive on
+smooth models and the README says so.
+
 ---
 
 ## 8. Stage 4 — Bake
@@ -371,7 +413,7 @@ retained vs source, elapsed time.
 
 ## 9. Interface
 
-Object Properties → FlowLOD.
+3D viewport sidebar (**N**) → **FlowLOD** tab.
 
 ```
 ┌─ FlowLOD ───────────────────────────────┐

@@ -130,6 +130,19 @@ class FlowLODSettings(PropertyGroup):
                     "replaces one half with a mirror of the other, including its UVs, so any "
                     "asymmetric texture detail will be mirrored",
     )
+    symmetrize_mode: EnumProperty(
+        name="Symmetrize Mode",
+        items=[
+            ("MIRROR", "Mirror", "Replace one half with a mirror of the other. Fast, but mirrors "
+                                 "UVs too, so asymmetric texture detail is lost"),
+            ("REBUILD", "Rebuild UVs", "Keep the sparser half, mirror it, give the mirrored half "
+                                       "its own atlas space and re-bake both sides from the "
+                                       "source. Exact symmetry with no texture loss. Requires "
+                                       "baking"),
+        ],
+        default="MIRROR",
+        description="How symmetry is enforced",
+    )
     cascade: BoolProperty(
         name="Cascade Levels", default=False,
         description="Reduce each level from the previous one rather than from the source, so the "
@@ -199,6 +212,7 @@ def to_settings(props) -> "analyse.Settings":
         cascade=props.cascade,
         symmetry=props.symmetry,
         symmetrize=props.symmetrize,
+        symmetrize_mode=props.symmetrize_mode,
         bake_normals=props.bake_normals,
         bake_resolution=props.bake_resolution,
         bake_margin=props.bake_margin,
@@ -386,6 +400,10 @@ class FLOWLOD_PT_panel(Panel):
         out.prop(props, "protect_weight")
         out.prop(props, "symmetry")
         out.prop(props, "symmetrize")
+        if props.symmetrize:
+            out.prop(props, "symmetrize_mode")
+            if props.symmetrize_mode == "REBUILD" and not props.bake_normals:
+                out.label(text="Rebuild changes UVs: enable Bake Normal Map", icon="ERROR")
         out.prop(props, "bake_normals")
         if props.bake_normals:
             row = out.row(align=True)

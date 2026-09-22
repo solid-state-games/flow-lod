@@ -173,22 +173,27 @@ right.
 7.5e-13), a symmetric decimation still produced 1.9e-04. Only mirroring the output gives exact
 symmetry.
 
-So FlowLOD detects the mirror axis and offers **Symmetrize Output**:
+So FlowLOD detects the mirror axis and offers **Symmetrize Output**, in two modes:
 
-| | worst mirror error | triangles |
-|---|---|---|
-| off | 2.7e-02 | 2,040 |
-| **on** | **6.7e-09** | 2,456 |
+| mode | worst mirror error | triangles | UV space |
+|---|---|---|---|
+| off | 2.7e-02 | 2,040 | separate |
+| Mirror | 6.7e-09 | 2,456 | **mirrored** |
+| **Rebuild UVs** | **7.2e-08** | 2,400 | **separate** |
 
-Two things to know before switching it on:
+**Mirror** replaces one half with a mirror of the other — fast, but it mirrors UVs along with
+geometry. If each side of your model has its own UVs (measured on one hull: 1 shared UV cell out of
+3,900) then both halves end up sampling the same texture region and asymmetric detail is lost. The
+Analyse panel tells you which case you are in.
 
-- **It mirrors UVs too.** One half is replaced by a mirror of the other, including its texture
-  coordinates. If each side of your model has its own UVs — measured on one hull, 1 shared UV cell
-  out of 3,900 — then after symmetrizing both halves sample the same texture region and any
-  asymmetric detail is mirrored. The Analyse panel says which case you are in.
-- **It can overshoot the budget.** Mirroring a half may yield more triangles than the asymmetric
-  result did (2,456 against a 2,042 target above). The report flags the level as over budget rather
-  than hiding it.
+**Rebuild UVs** avoids that entirely. It cuts down the centre, keeps the *sparser* half, mirrors it
+for exact symmetry, gives the mirrored half its own region of the atlas, repacks, and re-bakes both
+sides from the source. Symmetry then costs nothing texturally — each side still shows its own
+detail, because each side was projected from the corresponding side of the original. It requires
+baking, since the UV layout has changed and the old textures no longer apply.
+
+Both modes can overshoot the budget, because mirroring a half may yield more triangles than the
+asymmetric result did. The report flags the level as over budget rather than hiding it.
 
 Detection judges on **mean** error, because that is what signals intent: one hull measured 9.8e-05
 on X against 1.9e-02 on Y and Z. Its *worst* vertex was 2.1e-02 off, so judging on the worst case
@@ -270,7 +275,7 @@ If you are batching hundreds of assets through the CLI, that difference is the w
 blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 ```
 
-47 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
+49 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
 damage budgets, attribute survival, structure fidelity versus the Decimate baseline, and addon
 registration. No mocks; the mesh is the fixture.
 

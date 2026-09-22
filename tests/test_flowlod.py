@@ -290,6 +290,21 @@ def main():
     check("UV sidedness is reported so the symmetrize warning can be shown",
           isinstance(B.uvs_are_mirrored(obj.data), bool))
 
+    # REBUILD is the mode that gets exact symmetry WITHOUT mirroring texture detail: it keeps the
+    # sparser half, mirrors it, and gives the mirror its own atlas space to be re-baked into.
+    rebuild_settings = A.Settings(**{**settings.__dict__, "symmetrize": True,
+                                     "symmetrize_mode": "REBUILD", "bake_normals": True,
+                                     "bake_resolution": 256})
+    _rs, rebuild_reports = B.bake(sym_obj, rebuild_settings, [("QUALITY", 0.25)])
+    rr = rebuild_reports[0]
+    rebuilt = bpy.data.objects[rr["name"]].data
+    check("rebuild symmetrize produces exact symmetry",
+          sym_error(rebuilt) / diag < 1e-5 and rr.get("symmetrized") == "rebuild",
+          f"worst {sym_error(rebuilt) / diag:.2e}, mode {rr.get('symmetrized')}")
+    check("rebuild symmetrize keeps the halves in separate UV space",
+          not B.uvs_are_mirrored(rebuilt),
+          "each side owns its own atlas region, so neither mirrors the other's texture")
+
     # ---- normal-map baking ------------------------------------------------------------
     src_mat_names = [m.name if m else None for m in obj.data.materials]
     src_node_counts = [len(m.node_tree.nodes) if (m and m.use_nodes) else 0

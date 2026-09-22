@@ -173,6 +173,94 @@ def uvs_are_mirrored(me, axis: int = 0) -> bool:
     return len(left & right) > 0.5 * smaller
 
 
+def symmetrize_rebuild(me, axis: str, diagonal: float) -> bool:
+    """Exact symmetry that keeps each side's own texture space.
+
+    Cut down the middle, keep the sparser half, mirror it for exact symmetry, then give the
+    mirrored half its own region of the UV atlas so both sides can be re-baked from the source
+    independently. Unlike a plain symmetrize this does not mirror texture detail -- it only
+    mirrors geometry.
+
+    Callers must re-bake afterwards: the UV layout has changed and the old textures no longer
+    apply.
+    """
+    from mathutils import Matrix, Vector
+
+    index = "XYZ".index(axis)
+    normal = Vector((1.0 if index == 0 else 0.0,
+                     1.0 if index == 1 else 0.0,
+                     1.0 if index == 2 else 0.0))
+
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    uv_layer = bm.loops.layers.uv.active
+    if uv_layer is None:
+        bm.free()
+        return False
+
+    bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
+                           plane_co=Vector((0, 0, 0)), plane_no=normal,
+                           clear_inner=False, clear_outer=False)
+
+    def centre(face):
+        return sum(v.co[index] for v in face.verts) / len(face.verts)
+
+    negative = [f for f in bm.faces if centre(f) < 0]
+    positive = [f for f in bm.faces if centre(f) >= 0]
+    if not negative or not positive:
+        bm.free()
+        return False
+
+    n_verts = len({v for f in negative for v in f.verts})
+    p_verts = len({v for f in positive for v in f.verts})
+    keep, drop = (negative, positive) if n_verts <= p_verts else (positive, negative)
+    bmesh.ops.delete(bm, geom=drop, context="FACES")
+
+    # Halve the kept side's UVs, then hand the mirror the other half of the atlas. Repacking
+    # afterwards recovers the texel density this costs.
+    for face in bm.faces:
+        for loop in face.loops:
+            loop[uv_layer].uv.x *= 0.5
+
+    # bmesh.ops.mirror duplicates AND mirrors; duplicating first would create a third copy whose
+    # UV offset then lands on geometry that gets welded away.
+    result = bmesh.ops.mirror(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
+                              matrix=Matrix.Identity(4), merge_dist=-1, axis=axis)
+    for face in (f for f in result["geom"] if isinstance(f, bmesh.types.BMFace)):
+        for loop in face.loops:
+            loop[uv_layer].uv.x += 0.5
+
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=diagonal * 1e-5)
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    return True
+
+
+def repack_uvs(obj, margin: float = 0.002):
+    """Recover texel density after the atlas split, using Blender's own packer."""
+    previous = bpy.context.view_layer.objects.active
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    try:
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.select_all(action="SELECT")
+        bpy.ops.uv.pack_islands(margin=margin)
+        bpy.ops.object.mode_set(mode="OBJECT")
+    except Exception:
+        try:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception:
+            pass
+        return False
+    finally:
+        bpy.context.view_layer.objects.active = previous
+    return True
+
+
 def symmetrize_mesh(me, axis: str):
     """Mirror one half of the mesh onto the other, giving exact symmetry."""
     bm = bmesh.new()
@@ -393,8 +481,15 @@ def bake(obj, settings: Settings, levels) -> list:
             (d.get("symmetry") for _n, d in report.get("tiers", []) if isinstance(d, dict)
              and "symmetry" in d), "none")
         if settings.symmetrize and report.get("symmetry") not in (None, "none"):
-            symmetrize_mesh(lod.data, report["symmetry"])
-            report["symmetrized"] = True
+            if settings.symmetrize_mode == "REBUILD":
+                diag = max(1e-9, obj.dimensions.length)
+                ok = symmetrize_rebuild(lod.data, report["symmetry"], diag)
+                report["symmetrized"] = "rebuild" if ok else "failed"
+                if ok:
+                    repack_uvs(lod)
+            else:
+                symmetrize_mesh(lod.data, report["symmetry"])
+                report["symmetrized"] = "mirror"
             # Mirroring a half can yield more triangles than the asymmetric result did, so the
             # level may land over budget. Say so rather than quietly reporting the pre-symmetrize
             # count.

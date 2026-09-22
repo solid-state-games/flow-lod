@@ -412,6 +412,17 @@ and Z — unambiguous intent — while its worst vertex was 2.1e-02 off. A worst
 enough to be meaningful rejects meshes that are plainly modelled symmetric, so the mean decides and
 the worst is reported as drift.
 
+**Rebuild mode removes the texture cost.** A plain symmetrize mirrors UVs with the geometry. The
+alternative is to cut down the centre, keep the sparser half, mirror it for exact symmetry, give
+the mirrored half its own region of the atlas, repack, and re-bake both sides from the source. Each
+side is then projected from the corresponding side of the original, so no texture detail is
+mirrored. Measured: worst symmetry error 7.2e-08, zero shared UV cells, and slightly fewer triangles
+than a plain mirror (2,400 vs 2,456).
+
+One implementation trap: `bmesh.ops.mirror` duplicates *and* mirrors in a single step. Calling
+`duplicate()` first creates a third copy, and the UV offset then lands on geometry that the seam
+weld removes — which silently produced shared UVs that looked like the feature not working.
+
 **Symmetrizing has two costs, both surfaced rather than hidden.** It mirrors UVs along with
 geometry, so a model whose sides have unique UVs (measured: 1 shared UV cell of 3,900, becoming
 100% shared afterwards) will mirror its texture detail. And mirroring a half can yield more

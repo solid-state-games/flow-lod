@@ -119,6 +119,11 @@ class Settings:
     # plainly meant to be symmetric. The worst figure is reported instead, as drift.
     symmetry_tolerance: float = 1e-3   # on the MEAN, relative to bbox diagonal
     symmetrize: bool = False           # mirror each LOD exactly; see the UV warning
+    # MIRROR replaces one half with a mirror of the other, UVs included, so a model whose sides
+    # have unique UVs loses that detail. REBUILD keeps the sparser half, mirrors it for exact
+    # symmetry, gives the mirrored half its own atlas space, and re-bakes both sides from the
+    # source -- so symmetry costs nothing texturally. REBUILD requires baking.
+    symmetrize_mode: str = "MIRROR"    # MIRROR | REBUILD
 
     # Normal-map baking. Decimation preserves the source UV layout almost exactly (measured: UV
     # area 0.6521 -> 0.6472, no degenerate or NaN coordinates), so a LOD can reuse the original

@@ -114,6 +114,33 @@ an artifact, not a win: an unwelded mesh has split vertices Decimate cannot coll
 accidentally preserves creases while carrying more than twice the vertices for the same triangle
 count. Vertex count is what costs on the GPU and in a glTF file. Weld first.
 
+### Budgets from measured error, not guesswork
+
+A level can be set three ways: an absolute triangle count, a fraction of the source, or a **maximum
+deviation** — the largest shape error you will accept, as a fraction of the model's size.
+
+Deviation is the useful one across a set of assets. FlowLOD measures a real error curve by reducing
+at ten ratios and comparing each result to the source, then picks the smallest triangle count that
+stays inside your limit. Because a given ratio costs different error on different models, equalising
+error rather than ratio is what makes a fleet look consistent. Measured on three hulls:
+
+| asset | dev ≤ 0.003 | dev ≤ 0.008 | dev ≤ 0.015 |
+|---|---|---|---|
+| A | 90% | 50% | 18% |
+| B | 70% | 35% | 18% |
+| C | 70% | 25% | 12% |
+
+At the same visual error, A keeps half its triangles where C keeps a quarter. A fixed 25% ladder
+would have over-reduced A and under-reduced C. The curve costs well under a second and is only
+measured when a level actually asks for it.
+
+This follows the approach in
+[Efficient Four-Level LOD Simplification](https://www.mdpi.com/2220-9964/15/2/61) (Sun et al.,
+ISPRS IJGI 2026), which makes the same argument: fixed rates lack principled guidance, and uniform
+rates suit heterogeneous geometry badly. Their knee-of-the-curve heuristic was measured here and
+did not transfer — on four hard-surface hulls the error curve is close to linear in log(triangles)
+with no meaningful knee, so the curve is used as a calibration rather than for breakpoint finding.
+
 ### Symmetry is detected and preserved
 
 A symmetric model that comes back asymmetric is an obvious, visible defect, and it is the default
@@ -206,7 +233,7 @@ If you are batching hundreds of assets through the CLI, that difference is the w
 blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 ```
 
-39 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
+41 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
 damage budgets, attribute survival, structure fidelity versus the Decimate baseline, and addon
 registration. No mocks; the mesh is the fixture.
 

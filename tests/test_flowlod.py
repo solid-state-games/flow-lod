@@ -227,6 +227,20 @@ def main():
           f"{stats['raw_verts']} -> {stats['welded_verts']} "
           f"(-{stats['verts_saved_pct']:.0f}%) at identical geometry")
 
+    # ---- deviation-driven budgets -----------------------------------------------------
+    diag = (src_hi - src_lo).length
+    cbm = bmesh.new(); cbm.from_mesh(obj.data); A.prepare(cbm, settings)
+    cme = bpy.data.meshes.new("curvesrc"); cbm.to_mesh(cme); cbm.free()
+    curve = B.error_curve(cme, settings, diag)
+    bpy.data.meshes.remove(cme)
+
+    check("error curve is monotonic in deviation",
+          all(curve[i][2] <= curve[i + 1][2] + 1e-9 for i in range(len(curve) - 1)),
+          f"{[round(c[2], 5) for c in curve]}")
+    tight, loose = B.tris_for_deviation(curve, 0.003), B.tris_for_deviation(curve, 0.015)
+    check("a tighter deviation cap yields more triangles", tight > loose,
+          f"dev<=0.003 -> {tight} tris, dev<=0.015 -> {loose} tris")
+
     # ---- symmetry ---------------------------------------------------------------------
     # A symmetric model that comes back asymmetric is an obvious, visible defect.
     from mathutils import Matrix, Vector

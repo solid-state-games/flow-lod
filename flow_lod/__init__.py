@@ -42,11 +42,19 @@ class FlowLODLevel(PropertyGroup):
         items=[
             ("TRIS", "Tris", "Absolute triangle target"),
             ("QUALITY", "Quality", "Fraction of the repaired source, 0-1"),
+            ("DEVIATION", "Deviation", "Largest acceptable shape error, as a fraction of the "
+                                       "model's size. Equalises quality across differently "
+                                       "complex assets instead of equalising ratio"),
         ],
         default="TRIS",
     )
     tris: IntProperty(name="Triangles", default=3000, min=4, soft_max=200000)
     quality: FloatProperty(name="Quality", default=0.25, min=0.001, max=1.0)
+    deviation: FloatProperty(
+        name="Max Deviation", default=0.005, min=0.00001, max=0.5, precision=4,
+        description="Largest acceptable mean deviation, as a fraction of the model's bounding "
+                    "diagonal. 0.005 is half a percent of the model's size",
+    )
 
 
 class FlowLODSettings(PropertyGroup):
@@ -268,7 +276,8 @@ class FLOWLOD_OT_bake(Operator):
             self.report({"ERROR"}, "No active mesh object")
             return {"CANCELLED"}
         props = obj.flow_lod
-        levels = [(l.mode, l.tris if l.mode == "TRIS" else l.quality) for l in props.levels]
+        levels = [(l.mode, {"TRIS": l.tris, "QUALITY": l.quality,
+                            "DEVIATION": l.deviation}[l.mode]) for l in props.levels]
 
         stats, reports = bake.bake(obj, to_settings(props), levels)
         text = bake.format_report(stats, reports)
@@ -294,7 +303,8 @@ class FLOWLOD_UL_levels(UIList):
         row = layout.row(align=True)
         row.label(text=f"LOD{index + 1}")
         row.prop(item, "mode", text="")
-        row.prop(item, "tris" if item.mode == "TRIS" else "quality", text="")
+        field = {"TRIS": "tris", "QUALITY": "quality", "DEVIATION": "deviation"}[item.mode]
+        row.prop(item, field, text="")
 
 
 class FLOWLOD_PT_panel(Panel):

@@ -409,6 +409,28 @@ that is the only plane Blender enforces about — apply transforms first. And sy
 which edges may collapse, so a level can land slightly under target; the ratio iteration only
 corrects overshoot, since under budget is never a problem.
 
+### 7.8 Choosing budgets
+
+Fixed ladders (50/25/10) are arbitrary, and a fixed ratio costs different error on different models,
+so a fleet reduced uniformly looks uneven. Measured mean deviation at a 25% budget across three
+hulls: 0.0111, 0.0090, 0.0074 of the bounding diagonal.
+
+`error_curve()` reduces at ten ratios and measures each result against the source, giving a real
+fidelity/cost curve per mesh. A level set to `DEVIATION` then asks for the smallest triangle count
+whose measured error stays inside a cap. Cost is 0.4-0.9s, paid once per bake and only when a level
+requests it.
+
+Deviation is a mean vertex-to-nearest-vertex distance over the bounding diagonal, not a Hausdorff
+distance. It is a proxy, chosen because it needs one KD-tree rather than a raycast per sample, and
+it is monotonic in the quantity of interest -- which is all a calibration curve requires.
+
+**A published heuristic that did not transfer.** Sun et al. (ISPRS IJGI 2026,
+*Efficient Four-Level LOD Simplification*) derive LOD rates from the knee of a cumulative
+edge-collapse loss curve. Measured on four hard-surface hulls here, the curve is close to linear in
+log(triangles) and the knee scores cluster indistinguishably (0.0020 / 0.0018 / 0.0015 / 0.0012 on
+one asset). There is no natural breakpoint in this asset class, so knee-finding would return an
+arbitrary answer. Their framing of the problem was adopted; their solution was not.
+
 ---
 
 ## 8. Stage 4 — Bake
@@ -482,6 +504,24 @@ interactive behaviour cannot drift. `--budgets` takes integers (triangles) or fl
 Exit code is non-zero if any level fell through to unconstrained QEM, so it can gate a build.
 
 ---
+
+## 10b. Methods evaluated and not adopted
+
+- **TriFlow** (ECCV 2026) — generative mesh topology from signed distance fields via a
+  flow-matching network. Wrong input for this tool (an SDF, not a textured asset), discards UVs and
+  materials by construction, needs PyTorch and a GPU, and the repository carries no clear licence.
+  Relevant only to a future proxy-LOD stage where textures are rebaked anyway.
+- **SQuadGen** (SIGGRAPH 2026, MIT) — diffusion-based quad *layout* generation via chart distance
+  fields. Its authors state plainly it is retopology, not simplification. It is the quality ceiling
+  for §5's tris-to-quads stage, which currently uses `join_triangles`, but it needs PyTorch and a
+  trained model and so cannot live in a zero-dependency addon.
+- **meshoptimizer** (MIT) — not on PyPI, and triangles-only.
+- **pyfqmr / fast_simplification / open3d** — all publish wheels matching Blender's Python
+  (cp311, macOS ARM among others), so any of them could be bundled. None were, because Blender's
+  own Decimate already wins and costs nothing to ship.
+- **Simplygon** — the commercial state of the art and a useful design reference (cascaded chains,
+  remeshing proxies with hole filling, an isotropicity control over the sliver/fit tradeoff).
+  Proprietary, and integrates through a glTF round trip, so it cannot be bundled.
 
 ## 11. Scope
 

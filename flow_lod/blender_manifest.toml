@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+
+id = "flow_lod"
+version = "0.1.0"
+name = "FlowLOD"
+tagline = "Flow-preserving LOD generation with per-level polygon budgets"
+maintainer = "FlowLOD contributors"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+
+tags = ["Mesh", "Object"]

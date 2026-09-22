@@ -12,8 +12,8 @@ import bmesh
 import bpy
 
 from .analyse import (
-    FEATURE, LOCKED, Settings, analyse, detect_symmetry, prepare, protect_vertices, symmetry_report,
-    tri_count, quad_ratio,
+    FEATURE, LOCKED, Settings, analyse, detect_symmetry, prepare, protect_vertices,
+    symmetry_report, tri_count, quad_ratio,
 )
 
 
@@ -128,26 +128,6 @@ def _mark_sharp(bm, settings: Settings):
     for e in bm.edges:
         if len(e.link_faces) != 2 or e.calc_face_angle(0.0) > feat:
             e.smooth = False
-
-
-def _needs_no_prep(me, settings: Settings) -> bool:
-    """True when every preprocessing stage would be a no-op for this mesh and these settings."""
-    if settings.detriangulate or settings.clean:
-        return False
-    if settings.protect_weight > 0.0 or settings.remark_sharp:
-        return False
-    if any(len(p.vertices) > 3 for p in me.polygons):
-        return False
-    if settings.weld:
-        import bmesh as _bm
-        from .analyse import bbox_diagonal, has_duplicate_verts
-        probe = _bm.new()
-        probe.from_mesh(me)
-        dirty = has_duplicate_verts(probe, settings.weld_factor * bbox_diagonal(probe))
-        probe.free()
-        if dirty:
-            return False
-    return True
 
 
 def uvs_are_mirrored(me, axis: int = 0) -> bool:
@@ -336,28 +316,6 @@ def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None
     t0 = time.time()
 
     base = source_mesh if source_mesh is not None else obj.data
-
-    # Fast path: when nothing needs preprocessing, hand the untouched mesh straight to Decimate.
-    # A bmesh round trip is not free -- measured, it costs several F1 points on an already-clean
-    # mesh -- so the cheapest correct thing is to not do one.
-    if _needs_no_prep(base, settings):
-        axis = mesh_symmetry(base, settings)
-        me, dec = decimate_mesh(base.copy(), target, None, settings, axis=axis)
-        dec["symmetry"] = axis or "none"
-        me.name = name
-        lod = bpy.data.objects.new(name, me)
-        lod.matrix_world = obj.matrix_world.copy()
-        for slot in obj.material_slots:
-            me.materials.append(slot.material)
-        final = sum(len(p.vertices) - 2 for p in me.polygons)
-        return lod, {
-            "target": target, "start_tris": sum(len(p.vertices) - 2 for p in base.polygons),
-            "tiers": [("decimate-direct", dec)], "protected": 0,
-            "deepest_tier": 0, "deepest_tier_name": "decimate-direct",
-            "final_tris": final, "final_verts": len(me.vertices), "quad_ratio": 0.0,
-            "hit_budget": final <= target * 1.02, "prepare": {"skipped": True},
-            "seconds": time.time() - t0,
-        }
 
     bm = bmesh.new()
     bm.from_mesh(base)

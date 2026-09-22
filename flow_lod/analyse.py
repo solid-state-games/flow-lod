@@ -18,11 +18,6 @@ FREE = 0
 FEATURE = 1
 LOCKED = 2
 
-# Vertex classes
-V_FREE = 0
-V_FEATURE = 1
-V_CORNER = 2
-
 UV_EPS = 1e-5
 
 
@@ -61,16 +56,6 @@ class Settings:
     feature_angle_min: float = 15.0    # clamp, so a flat mesh does not protect noise
     feature_angle_max: float = 80.0    # and a faceted one does not freeze solid
     feature_angle: float = 70.0        # used when adaptive_features is off
-
-    # corner_angle barely moves the result (F1 83.1% at 45deg vs 83.8% at 180deg), so it is wide
-    # by default and exists as an escape hatch rather than a tuning knob.
-    corner_angle: float = 180.0
-
-    # Chord collapse is OFF for triangulated input by default. Measured on the reference asset at
-    # 3057 tris: chords on = F1 78.8%, chords off = F1 83-85%. Removing whole quad rows is
-    # density-uniform, so on a hull whose curvature varies it deviates more than error-driven
-    # collapse does. It is still the right tool for genuinely quad-modelled assets, where even
-    # topology and loop structure are the point -- hence "auto".
 
 
     protect_seams: bool = True
@@ -130,8 +115,6 @@ class Settings:
 @dataclass
 class Analysis:
     edge_class: dict = field(default_factory=dict)
-    vert_class: dict = field(default_factory=dict)
-    polylines: list = field(default_factory=list)
     chords: list = field(default_factory=list)
     stats: dict = field(default_factory=dict)
 
@@ -177,23 +160,6 @@ def bbox_diagonal(bm) -> float:
 # --------------------------------------------------------------------------------------
 # Stage 0: repair
 # --------------------------------------------------------------------------------------
-
-def has_duplicate_verts(bm, dist: float) -> bool:
-    """Would welding at `dist` actually merge anything?
-
-    ponytail: this was a spatial hash, which produced false positives and sent clean meshes down
-    the slow path for no reason. A trial weld on a throwaway copy is exact, simpler, and fast
-    enough -- the clever version was both wrong and unnecessary.
-    """
-    if dist <= 0.0:
-        return False
-    probe = bm.copy()
-    before = len(probe.verts)
-    bmesh.ops.remove_doubles(probe, verts=probe.verts[:], dist=dist)
-    after = len(probe.verts)
-    probe.free()
-    return after < before
-
 
 def symmetry_error(bm, axis: int) -> float:
     """(mean, worst) distance from each vertex to the nearest vertex of the mesh mirrored on `axis`.
@@ -340,10 +306,10 @@ def repair(bm, settings: Settings) -> dict:
     if not settings.weld:
         return {"welded": False, "verts_before": before_v, "verts_after": before_v}
 
+    # Weld once and compare counts. An earlier version ran a trial weld on a copy first to
+    # decide whether to weld at all, which cost the same as welding and guarded against a
+    # fidelity loss that turned out to be a measurement artifact.
     dist = settings.weld_factor * bbox_diagonal(bm)
-    if not has_duplicate_verts(bm, dist):
-        return {"welded": False, "reason": "already clean",
-                "verts_before": before_v, "verts_after": before_v, "verts_saved_pct": 0.0}
     bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=dist)
 
     return {
@@ -485,38 +451,6 @@ def classify_edges(bm, settings: Settings) -> dict:
     return out
 
 
-def feature_polylines(bm, edge_class: dict) -> list:
-    """Chain FEATURE edges into runs that behave as one curve.
-
-    A crease is allowed to lose vertices along its length. It is not allowed to stop being a
-    continuous, straight, sharp line -- so the polyline, not the edge, is the preserved object.
-    """
-    feats = {e for e, c in edge_class.items() if c == FEATURE}
-    seen = set()
-    lines = []
-
-    for start in feats:
-        if start in seen:
-            continue
-        line = [start]
-        seen.add(start)
-        # extend from both ends through vertices where exactly two feature edges meet
-        for end in (0, 1):
-            cur, vert = start, start.verts[end]
-            while True:
-                nxt = [e for e in vert.link_edges if e in feats and e is not cur]
-                if len(nxt) != 1:
-                    break
-                cur = nxt[0]
-                if cur in seen:
-                    break
-                seen.add(cur)
-                line.insert(0, cur) if end == 0 else line.append(cur)
-                vert = cur.other_vert(vert)
-        lines.append(line)
-    return lines
-
-
 def protect_vertices(bm, edge_class: dict, settings: Settings) -> list:
     """Vertex indices worth freezing, as a list suitable for a vertex group.
 
@@ -537,37 +471,6 @@ def protect_vertices(bm, edge_class: dict, settings: Settings) -> list:
             continue
         if sum(1 for e in incident if edge_class.get(e) == FEATURE) >= 3:
             out.append(v.index)
-    return out
-
-
-def classify_verts(bm, edge_class: dict, settings: Settings) -> dict:
-    """CORNER / FEATURE / FREE per vertex.
-
-    CORNER vertices are frozen: where lines meet and where lines turn. Their removal is the kind
-    of change you notice instantly.
-    """
-    corner_rad = math.radians(settings.corner_angle)
-    out = {}
-    for v in bm.verts:
-        incident = [e for e in v.link_edges]
-        if any(edge_class.get(e) == LOCKED for e in incident):
-            out[v] = V_CORNER
-            continue
-
-        feats = [e for e in incident if edge_class.get(e) == FEATURE]
-        if not feats:
-            out[v] = V_FREE
-            continue
-        if len(feats) != 2:
-            out[v] = V_CORNER          # junction or dead end
-            continue
-
-        a, b = feats
-        va = (a.other_vert(v).co - v.co).normalized()
-        vb = (b.other_vert(v).co - v.co).normalized()
-        # straight through => va and vb are near-opposite => angle between them near pi
-        turn = math.pi - va.angle(vb, 0.0)
-        out[v] = V_CORNER if turn > corner_rad else V_FEATURE
     return out
 
 
@@ -615,15 +518,11 @@ def analyse(bm, settings: Settings) -> Analysis:
     bm.faces.ensure_lookup_table()
 
     edge_class = classify_edges(bm, settings)
-    polylines = feature_polylines(bm, edge_class)
-    vert_class = classify_verts(bm, edge_class, settings)
     chords = trace_chords(bm)
 
     chord_lens = sorted((len(c) for c in chords), reverse=True)
     a = Analysis(
         edge_class=edge_class,
-        vert_class=vert_class,
-        polylines=polylines,
         chords=chords,
         stats={
             "edges": len(bm.edges),
@@ -632,11 +531,9 @@ def analyse(bm, settings: Settings) -> Analysis:
             "locked": sum(1 for c in edge_class.values() if c == LOCKED),
             "feature": sum(1 for c in edge_class.values() if c == FEATURE),
             "free": sum(1 for c in edge_class.values() if c == FREE),
-            "polylines": len(polylines),
             "chords": len(chords),
             "chord_mean": (sum(chord_lens) / len(chord_lens)) if chord_lens else 0.0,
             "chord_max": chord_lens[0] if chord_lens else 0,
-            "corners": sum(1 for c in vert_class.values() if c == V_CORNER),
         },
     )
     a.stats["structural_floor"] = a.structural_floor()

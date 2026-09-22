@@ -68,9 +68,13 @@ class FlowLODSettings(PropertyGroup):
         description="Dihedral angle above which an edge counts as a feature. "
                     "Bimodal hard-surface meshes need 50 or more; 25 classifies everything",
     )
-    corner_angle: FloatProperty(name="Corner Angle (deg)", default=180.0, min=0.0, max=180.0)
 
 
+    clean: BoolProperty(
+        name="Clean", default=True,
+        description="Remove orphan fragments, dissolve degenerate geometry and make normals "
+                    "consistent. Generated meshes routinely arrive with all three",
+    )
     weld: BoolProperty(
         name="Weld First", default=True,
         description="Merge split vertices, automatically skipped when the mesh has none. "
@@ -176,10 +180,10 @@ def active_mesh(context):
 
 def to_settings(props) -> "analyse.Settings":
     return analyse.Settings(
+        clean=props.clean,
         weld=props.weld,
         detriangulate=props.detriangulate,
         feature_angle=props.feature_angle,
-        corner_angle=props.corner_angle,
         protect_seams=props.protect_seams,
         protect_sharp=props.protect_sharp,
         protect_materials=props.protect_materials,
@@ -362,7 +366,6 @@ class FLOWLOD_PT_panel(Panel):
         flow = layout.box()
         flow.label(text="Flow")
         flow.prop(props, "feature_angle")
-        flow.prop(props, "corner_angle")
         grid = flow.grid_flow(columns=3, even_columns=True)
         for name in ("protect_seams", "protect_sharp", "protect_materials",
                      "protect_boundary", "protect_curvature"):
@@ -371,6 +374,7 @@ class FLOWLOD_PT_panel(Panel):
         out = layout.box()
         out.label(text="Output")
         out.prop(props, "weld")
+        out.prop(props, "clean")
         out.prop(props, "detriangulate")
         out.prop(props, "selective_protect")
         out.prop(props, "protect_weight")

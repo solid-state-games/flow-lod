@@ -626,6 +626,24 @@ affected output at all: `protect_weight` is 0 because protection measured harmfu
 symmetry detection and the optional protect/sharp paths still use it — but the honest description
 of this tool is a workflow around Decimate, not a novel simplifier.
 
+### 10c.2 Second audit pass
+
+A repo-wide over-engineering audit after the simplifier deletion found another 148 lines that
+nothing reached:
+
+- `classify_verts` and the vertex classes. The result was stored on `Analysis` and never read;
+  `protect_vertices` re-derives what it needs from `edge_class`.
+- `feature_polylines`. Computed on every `analyse()` call, read only by one test assertion.
+- The fast path in `bake_level`, with `_needs_no_prep` and `has_duplicate_verts`. Unreachable,
+  because it bails whenever `clean` is enabled and `clean` defaults on. The fidelity concern that
+  motivated it was the unwelded-reference measurement artifact.
+- `repair()` welded twice, once as a trial on a copy to decide and once for real.
+
+Measured before the cut: 26% of every `analyse()` call computed results nothing consumed.
+
+The audit also surfaced a gap rather than a cut. The `clean` stage had a `Settings` field and no UI
+property, so it could not be turned off from the panel.
+
 ## 11. Scope
 
 **In, v1:** weld repair · quad recovery · feature + chord analysis · three-tier simplification ·

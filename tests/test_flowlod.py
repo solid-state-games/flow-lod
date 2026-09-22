@@ -122,8 +122,8 @@ def main():
           f"max chord {an.stats['chord_max']}, mean {an.stats['chord_mean']:.1f}")
 
     src_struct = structure_points(rep, quad_settings)
-    check("feature polylines were found", an.stats["polylines"] > 0,
-          f"{an.stats['polylines']} polylines, {len(src_struct)} structure edges")
+    check("feature edges were found", an.stats["feature"] > 0,
+          f"{an.stats['feature']} feature edges, {len(src_struct)} structure edges")
     floor = an.stats["structural_floor"]
     rep.free()
 

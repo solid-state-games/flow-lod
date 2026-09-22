@@ -102,6 +102,19 @@ class FlowLODSettings(PropertyGroup):
         default="DECIMATE",
         description="Which reduction engine does the work",
     )
+    symmetry: EnumProperty(
+        name="Symmetry",
+        items=[
+            ("AUTO", "Auto", "Detect the mirror plane from the mesh and preserve it"),
+            ("X", "X", "Force mirror symmetry across X"),
+            ("Y", "Y", "Force mirror symmetry across Y"),
+            ("Z", "Z", "Force mirror symmetry across Z"),
+            ("NONE", "None", "Do not preserve symmetry"),
+        ],
+        default="AUTO",
+        description="A symmetric model that comes back asymmetric is an obvious defect. "
+                    "Detected automatically and enforced during reduction",
+    )
     cascade: BoolProperty(
         name="Cascade Levels", default=False,
         description="Reduce each level from the previous one rather than from the source, so the "
@@ -157,6 +170,7 @@ def to_settings(props) -> "analyse.Settings":
         selective_protect=props.selective_protect,
         engine=props.engine,
         cascade=props.cascade,
+        symmetry=props.symmetry,
         protect_weight=props.protect_weight,
         remark_sharp=props.remark_sharp,
         transfer_normals=props.transfer_normals,
@@ -230,7 +244,8 @@ class FLOWLOD_OT_analyse(Operator):
         obj.flow_lod.cached_stats = (
             f"{stats['raw_tris']} tris | {stats['raw_verts']} verts | "
             f"weld -{stats['verts_saved_pct']:.0f}% | quads {stats['quad_ratio']:.0%} | "
-            f"features {stats['feature_edges']} | floor ~{stats['structural_floor']}"
+            f"features {stats['feature_edges']} | floor ~{stats['structural_floor']} | "
+            f"symmetry {stats['symmetry']}"
         )
         self.report({"INFO"}, obj.flow_lod.cached_stats)
         return {"FINISHED"}
@@ -332,6 +347,7 @@ class FLOWLOD_PT_panel(Panel):
         out.prop(props, "detriangulate")
         out.prop(props, "selective_protect")
         out.prop(props, "protect_weight")
+        out.prop(props, "symmetry")
         out.prop(props, "engine")
         out.prop(props, "cascade")
         out.prop(props, "remark_sharp")

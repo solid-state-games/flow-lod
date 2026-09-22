@@ -227,6 +227,49 @@ def main():
           f"{stats['raw_verts']} -> {stats['welded_verts']} "
           f"(-{stats['verts_saved_pct']:.0f}%) at identical geometry")
 
+    # ---- symmetry ---------------------------------------------------------------------
+    # A symmetric model that comes back asymmetric is an obvious, visible defect.
+    from mathutils import Matrix, Vector
+    from mathutils.kdtree import KDTree
+
+    def sym_error(mesh, axis=0):
+        coords = [v.co.copy() for v in mesh.vertices]
+        tree = KDTree(len(coords))
+        for i, co in enumerate(coords):
+            tree.insert(co, i)
+        tree.balance()
+        worst = 0.0
+        for co in coords:
+            mirrored = co.copy()
+            mirrored[axis] = -mirrored[axis]
+            _, _, dist = tree.find(mirrored)
+            worst = max(worst, dist)
+        return worst
+
+    sbm = bmesh.new(); sbm.from_mesh(obj.data)
+    A.repair(sbm, settings)
+    bmesh.ops.bisect_plane(sbm, geom=sbm.verts[:] + sbm.edges[:] + sbm.faces[:],
+                           plane_co=Vector((0, 0, 0)), plane_no=Vector((1, 0, 0)),
+                           clear_inner=True)
+    bmesh.ops.mirror(sbm, geom=sbm.verts[:] + sbm.edges[:] + sbm.faces[:],
+                     matrix=Matrix.Identity(4), merge_dist=1e-5, axis="X")
+    bmesh.ops.remove_doubles(sbm, verts=sbm.verts[:], dist=1e-5)
+    sym_mesh = bpy.data.meshes.new("symsrc")
+    sbm.to_mesh(sym_mesh); sbm.free()
+    sym_obj = bpy.data.objects.new("SymAsset", sym_mesh)
+    bpy.context.scene.collection.objects.link(sym_obj)
+    diag = (src_hi - src_lo).length
+
+    check("symmetry is detected automatically",
+          B.mesh_symmetry(sym_mesh, settings) == "X",
+          f"detected {B.mesh_symmetry(sym_mesh, settings)}")
+
+    _st, sym_reports = B.bake(sym_obj, settings, [("QUALITY", 0.5), ("QUALITY", 0.25)])
+    for r in sym_reports:
+        worst = sym_error(bpy.data.objects[r["name"]].data) / diag
+        check(f"{r['name']} stays symmetric", worst < 1e-6,
+              f"worst mirror error {worst:.2e} of bbox diagonal")
+
     # ---- registration -----------------------------------------------------------------
     import flow_lod
     try:

@@ -392,6 +392,23 @@ interpolation, or make the protection far more selective so a vertex-group-drive
 actually reach a budget. Until one of those lands, this tool's reduction is not competitive on
 smooth models and the README says so.
 
+### 7.7 Symmetry
+
+Error-driven simplification has no notion that the left side of a model should match the right, so a
+symmetric asset reliably comes back asymmetric — the worst vertex on a measured hull drifted 2.7% of
+the bounding diagonal at a 25% budget, which reads immediately as a defect.
+
+Blender's Decimate can enforce mirror symmetry directly, and doing so holds it to machine precision
+(1.0e-10). FlowLOD detects the mirror plane rather than asking: `symmetry_error()` measures, per
+axis, the mean distance from each vertex to the nearest vertex of the mirrored mesh, and
+`detect_symmetry()` picks the axis whose error falls under `symmetry_tolerance` (1e-4 of the
+bounding diagonal).
+
+Two limits worth stating. Detection only finds mirroring about the object's **own origin**, because
+that is the only plane Blender enforces about — apply transforms first. And symmetry constrains
+which edges may collapse, so a level can land slightly under target; the ratio iteration only
+corrects overshoot, since under budget is never a problem.
+
 ---
 
 ## 8. Stage 4 — Bake

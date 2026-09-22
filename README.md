@@ -114,6 +114,27 @@ an artifact, not a win: an unwelded mesh has split vertices Decimate cannot coll
 accidentally preserves creases while carrying more than twice the vertices for the same triangle
 count. Vertex count is what costs on the GPU and in a glTF file. Weld first.
 
+### Symmetry is detected and preserved
+
+A symmetric model that comes back asymmetric is an obvious, visible defect, and it is the default
+outcome of any error-driven simplifier — nothing in a quadric metric knows that the left side
+should match the right.
+
+FlowLOD detects the mirror plane from the mesh itself and enforces it during reduction. Measured on
+a symmetric hull, worst-case mirror error as a fraction of the bounding diagonal:
+
+| budget | symmetry off | symmetry on |
+|---|---|---|
+| 50% | 1.0e-02 | **1.0e-10** |
+| 25% | 2.7e-02 | **1.0e-10** |
+
+Off, the worst vertex drifts nearly 3% of the model's size. On, symmetry holds to machine
+precision. Detection is automatic (`Symmetry: Auto`); it only recognises mirroring about the
+object's own origin, which is where Blender enforces it, so apply your transforms first.
+
+Symmetry constrains which edges may collapse, so a level can land slightly under its target. Under
+budget is fine; over budget is what gets corrected.
+
 ### Preprocessing is opt-in, because it is not free
 
 Every preprocessing stage costs some fidelity, so each is a switch and the defaults do the least:
@@ -125,6 +146,7 @@ Every preprocessing stage costs some fidelity, so each is a switch and the defau
 - **Cascade** — off; reducing each level from the previous compounds any loss down the ladder
 - **Protect strength** — 0; measured not to help, and at aggressive budgets it prevents the target
   being reached at all
+- **Symmetry** — auto; detected from the mesh and enforced
 
 ## What it does not do, measured
 
@@ -184,7 +206,7 @@ If you are batching hundreds of assets through the CLI, that difference is the w
 blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 ```
 
-36 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
+39 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
 damage budgets, attribute survival, structure fidelity versus the Decimate baseline, and addon
 registration. No mocks; the mesh is the fixture.
 

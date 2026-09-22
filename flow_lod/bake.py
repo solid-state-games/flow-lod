@@ -12,7 +12,8 @@ import bmesh
 import bpy
 
 from .analyse import (
-    FEATURE, LOCKED, Settings, analyse, prepare, protect_vertices, tri_count, quad_ratio,
+    FEATURE, LOCKED, Settings, analyse, detect_symmetry, prepare, protect_vertices, tri_count,
+    quad_ratio,
 )
 from .simplify import collapse_chords, simplify_to
 
@@ -47,6 +48,7 @@ def source_stats(obj) -> dict:
         "locked_edges": an.stats["locked"],
         "structural_floor": an.stats["structural_floor"],
         "chord_max": an.stats["chord_max"],
+        "symmetry": detect_symmetry(bm, s) or "none",
     }
     bm.free()
     return out
@@ -85,7 +87,16 @@ def _needs_no_prep(me, settings: Settings) -> bool:
     return True
 
 
-def decimate_mesh(me, target: int, protect_idx, settings: Settings) -> tuple:
+def mesh_symmetry(me, settings: Settings):
+    """Detect the mirror axis of a mesh datablock, or None."""
+    probe = bmesh.new()
+    probe.from_mesh(me)
+    axis = detect_symmetry(probe, settings)
+    probe.free()
+    return axis
+
+
+def decimate_mesh(me, target: int, protect_idx, settings: Settings, axis=None) -> tuple:
     """Reduce a mesh datablock to `target` triangles with Blender's Decimate modifier.
 
     The ratio is iterated because a protect group makes the achieved count undershoot the
@@ -100,6 +111,8 @@ def decimate_mesh(me, target: int, protect_idx, settings: Settings) -> tuple:
         vg = tmp.vertex_groups.new(name="FlowLOD_Protect")
         vg.add(list(protect_idx), 1.0, "REPLACE")
 
+    # Symmetry constrains which edges may collapse, so the achieved count undershoots slightly.
+    # Under budget is fine; the iteration below only corrects overshoot.
     current = sum(len(p.vertices) - 2 for p in me.polygons)
     ratio = min(1.0, target / max(1, current))
     result, achieved, passes = None, current, 0
@@ -110,6 +123,11 @@ def decimate_mesh(me, target: int, protect_idx, settings: Settings) -> tuple:
         mod.decimate_type = "COLLAPSE"
         mod.ratio = max(1e-6, min(1.0, ratio))
         mod.use_collapse_triangulate = True
+        if axis:
+            # Enforced by Blender itself; a symmetric source stays symmetric to machine precision
+            # instead of drifting by up to 2.4% of the model's size.
+            mod.use_symmetry = True
+            mod.symmetry_axis = axis
         if protect_idx and settings.protect_weight > 0.0:
             mod.vertex_group = "FlowLOD_Protect"
             mod.vertex_group_factor = settings.protect_weight
@@ -139,7 +157,9 @@ def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None
     # A bmesh round trip is not free -- measured, it costs several F1 points on an already-clean
     # mesh -- so the cheapest correct thing is to not do one.
     if settings.engine == "DECIMATE" and _needs_no_prep(base, settings):
-        me, dec = decimate_mesh(base.copy(), target, None, settings)
+        axis = mesh_symmetry(base, settings)
+        me, dec = decimate_mesh(base.copy(), target, None, settings, axis=axis)
+        dec["symmetry"] = axis or "none"
         me.name = name
         lod = bpy.data.objects.new(name, me)
         lod.matrix_world = obj.matrix_world.copy()
@@ -192,7 +212,9 @@ def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None
         bm.to_mesh(staged)
         bm.free()
 
-        me, dec = decimate_mesh(staged, target, protect, settings)
+        axis = mesh_symmetry(staged, settings)
+        me, dec = decimate_mesh(staged, target, protect, settings, axis=axis)
+        dec["symmetry"] = axis or "none"
         me.name = name
         bpy.data.meshes.remove(staged)
         report["tiers"].append(("decimate", dec))
@@ -258,6 +280,9 @@ def bake(obj, settings: Settings, levels) -> list:
             mod.data_types_loops = {"CUSTOM_NORMAL"}
             mod.loop_mapping = "POLYINTERP_NEAREST"
 
+        report["symmetry"] = next(
+            (d.get("symmetry") for _n, d in report.get("tiers", []) if isinstance(d, dict)
+             and "symmetry" in d), "none")
         report["name"] = name
         report["below_floor"] = target < stats["structural_floor"]
         reports.append(report)
@@ -285,6 +310,7 @@ def format_report(stats: dict, reports: list) -> str:
             f"  {r['name']}: {r['final_tris']} tris, {r['final_verts']} verts, "
             f"quads {r['quad_ratio']:.0%}, tier={r['deepest_tier_name']}, "
             f"chords={'on' if r.get('chords_used') else 'off'}, "
+            f"sym={r.get('symmetry', 'none')}, "
             f"{r['seconds']:.1f}s{flag}"
         )
     return "\n".join(lines)

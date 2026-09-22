@@ -126,9 +126,30 @@ test asserts our encode is the exact inverse of its decode (worst round-trip err
 that the card samples a different cell than the one rendered, and no amount of shader tuning fixes
 it.
 
-### Known gaps
+### Status: not working end to end
 
-* **No ORM map.** The shader defaults that sampler to white, so the output is usable, but occlusion,
+The atlas renders, the shader loads it, and the card picks different frames as the camera moves. But
+a comparison against the source mesh from matching angles does **not** line up. At a camera on Godot
++X the mesh shows a long horizontal profile and the impostor shows a short upright one, roughly 90
+degrees out.
+
+What is proven and what is not:
+
+* **Proven.** Our cell-to-direction encoding is the exact inverse of the shader's decode, worst
+  round-trip error 3e-08, asserted in the test suite for both sphere modes.
+* **Not proven.** That the Blender camera direction used to render a cell corresponds to the Godot
+  direction the shader computes for it. That conversion, Godot `(x, y, z)` to Blender `(x, -z, y)`,
+  is the prime suspect. A wrong axis convention there produces exactly this symptom: internally
+  consistent, externally rotated.
+* **Also possible.** The test harness is a hand-built scene rather than the addon's own impostor
+  node, and the shader may expect setup it is not getting.
+
+The cheapest way to settle it is to place a Godot camera at a known direction, read back which
+atlas cell the shader samples, and compare with the cell that direction was rendered into.
+
+### Other gaps
+
+* **No ORM map.** The shader defaults that sampler to white, so output is usable, but occlusion,
   roughness and metallic are not baked.
 * **Upstream is Godot 3.** The reference addon does not compile in Godot 4 or Redot without porting
   (`hint_color`, `hint_albedo`, `CAMERA_MATRIX`, `ALPHA_SCISSOR` and the `1f` literal suffix all

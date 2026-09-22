@@ -708,9 +708,25 @@ origin, exactly where the source object sits. Under EEVEE with no lamps its real
 solid black, overlapping that one cell in the normal pass only. Everything is hidden during the
 atlas render now.
 
-Verified in Redot 26.2: the ported shader compiles, loads all three textures, and the card selects
-visibly different frames as the camera orbits. Still missing: an ORM map, and a pixel comparison
-against the source mesh from matching angles.
+**The end-to-end test in Redot 26.2 fails, and that is what it was for.** The ported shader compiles,
+loads all three textures, and the card visibly selects different frames as the camera orbits. But
+rendering the impostor and the source mesh from matching directions gives different views, about 90
+degrees apart.
+
+This is worth separating carefully, because the round-trip test passing made it tempting to call the
+feature done:
+
+- The encode/decode round trip proves our atlas is *internally* consistent with the shader. It says
+  nothing about whether the Blender camera direction used to render a given cell matches the Godot
+  direction the shader computes for that same cell.
+- That conversion, Godot `(x, y, z)` to Blender `(x, -z, y)`, is unverified and is the prime
+  suspect. A wrong handedness or axis pairing there yields exactly this symptom.
+- The harness is also suspect: it is a hand-built quad rather than the addon's own impostor node,
+  and may not give the shader the setup it expects.
+
+Next step is to instrument rather than guess: place a camera at a known direction in Godot, read
+back which cell the shader samples, and compare against the cell that direction was rendered into.
+That distinguishes a bad axis conversion from a bad harness in one measurement.
 
 ## 11. Scope
 

@@ -25,7 +25,17 @@ import dock (**Meshes > Generate LODs**), or you get two systems fighting.
 
 ## Impostor
 
-FlowLOD writes three textures next to your blend, or wherever **Atlas Folder** points:
+FlowLOD writes three textures next to your blend, or wherever **Atlas Folder** points. Each cell of
+the grid is one pre-rendered view, laid out octahedrally so neighbouring cells are neighbouring
+angles:
+
+![Impostor atlas](05-impostor-atlas.png)
+
+The same four cells across all three maps. Albedo carries the mask in alpha, normal is camera-space
+per frame, depth sits at 0.5 on the card plane:
+
+![The three maps](06-impostor-maps.png)
+
 
 | file | contents |
 |---|---|
@@ -33,13 +43,27 @@ FlowLOD writes three textures next to your blend, or wherever **Atlas Folder** p
 | `<Name>_impostor_normal.png` | per-frame camera-space normals |
 | `<Name>_impostor_depth.png` | depth in the red channel, 0.5 at the card plane |
 
+### You do not need to port the upstream addon
+
+Its baking machinery, editor windows and LOD node are all replaced by FlowLOD plus Godot's built-in
+`visibility_range_*`. The only part you need is a shader, and all three variants ship here already
+ported and verified to compile in Redot 26.2:
+
+| file | use |
+|---|---|
+| `flowlod_impostor.gdshader` | standard, lit, reads albedo + normal + depth |
+| `flowlod_impostor_light.gdshader` | cheaper, fewer samples. Suits FlowLOD's output, which has no ORM |
+| `flowlod_impostor_shadows.gdshader` | for casting shadows from the card |
+
 ### Shader
 
 `godot/flowlod_impostor.gdshader` in this repo is a Godot 4 port of
 [Godot-Octahedral-Impostors](https://github.com/wojtekpil/Godot-Octahedral-Impostors) by wojtekpil
 (MIT, see `godot/UPSTREAM-LICENSE`). Upstream targets Godot 3 and will not compile in Godot 4.
 
-The port applies the Godot 4 renames and fixes one real bug: GLSL `sign(0.0)` returns zero, which
+The port applies the Godot 4 renames (`source_color`, `hint_default_white`, `INV_VIEW_MATRIX`,
+`MODEL_MATRIX`, `ALPHA_SCISSOR_THRESHOLD`, `depth_prepass_alpha`, no `1f` literals) and fixes one
+real bug: GLSL `sign(0.0)` returns zero, which
 collapses both poles onto the same atlas cell, so a camera looking straight down samples the wrong
 view. Measured before the fix, a straight-down camera was 90 degrees off.
 

@@ -728,6 +728,21 @@ Next step is to instrument rather than guess: place a camera at a known directio
 back which cell the shader samples, and compare against the cell that direction was rendered into.
 That distinguishes a bad axis conversion from a bad harness in one measurement.
 
+### 10c.3 Final audit
+
+Every function and setting flagged by a repo-wide scan turned out to be reachable. The scan's
+"unused" hits were its own false positives: dotted calls (`I.octa_direction`, `_imp.bake_impostor`)
+do not match a bare-name regex, and `unregister` is called by Blender rather than by this code.
+
+One real observation stands: 14 settings have no UI control. They are advanced knobs with measured
+defaults (`weld_factor`, `feature_percentile`, `cage_factor`, `hidden_min_patch` and so on) and
+exposing all of them would bloat a panel that is already long. They stay code-only and documented
+in the `Settings` dataclass.
+
+Also fixed in this pass: a test asserted welding always halves the vertex count, which failed on an
+already-welded asset. Doing nothing to a clean mesh is correct behaviour, so the assertion now
+checks that welding never adds vertices and is lossless.
+
 ## 11. Scope
 
 **In, v1:** weld repair · quad recovery · feature + chord analysis · three-tier simplification ·

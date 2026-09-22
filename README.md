@@ -140,6 +140,9 @@ visible from the atlas alone:
   fixes it.
 
 `docs/GODOT.md` has the setup: shader, parameters, texture import settings and visibility ranges.
+All three upstream shader variants ship ported in `godot/`, so there is nothing to port yourself.
+The rest of that addon is a Godot-side baker and a distance-swap node, both of which FlowLOD and
+Godot's own `visibility_range_*` replace.
 
 ### Other gaps
 

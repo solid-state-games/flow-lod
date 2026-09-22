@@ -1,4 +1,4 @@
-// FlowLOD impostor shader for Godot 4 / Redot 4 (standard).
+// FlowLOD impostor shader for Godot 4 / Redot 4 (light).
 //
 // Ported from Godot-Octahedral-Impostors by wojtekpil (MIT), which targets Godot 3:
 //   https://github.com/wojtekpil/Godot-Octahedral-Impostors
@@ -9,13 +9,12 @@ shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_schlick_ggx;
 uniform vec4 albedo : source_color = vec4(1, 1, 1, 1);
 uniform float specular = 0.5;
-uniform float metallic = 1.0;
+uniform float metallic = 0.0;
 uniform float roughness : hint_range(0, 1) = 1.0;
 
 uniform sampler2D imposterTextureAlbedo : source_color;
 uniform sampler2D imposterTextureNormal : hint_normal;
 uniform sampler2D imposterTextureDepth : hint_default_white;
-uniform sampler2D imposterTextureOrm : hint_default_white;
 uniform vec2 imposterFrames = vec2(16.0, 16.0);
 uniform vec3 positionOffset = vec3(0.0);
 uniform bool isFullSphere = true;
@@ -312,7 +311,6 @@ void vertex()
 	xy_frame3 = projectOnPlaneBasis(-vertexToCameraDir, projectedQuadCDir, plane_x3, plane_y3).xy;
 
 	//to fragment shader
-	//to fragment shader
 	VERTEX.xyz = projected + positionOffset;
 	VERTEX.xyz +=pivotToCameraDir* aabb_max;
 
@@ -379,13 +377,11 @@ void fragment()
 	vec2 uv_f3 = recalculateUV(uv_frame3, frame3, xy_frame3, quad_size, depth_scale, imposterTextureDepth);
 
 	vec4 baseTex = blenderColors(uv_f1, uv_f2,  uv_f3, quad_blend_weights, imposterTextureAlbedo);
-	vec4 ormTex = blenderColors(uv_f1, uv_f2, uv_f3, quad_blend_weights, imposterTextureOrm);
-
 	vec3 normalTex = blendedNormals(uv_f1, frame1_normal,
-								uv_f2, frame2_normal,
-								uv_f3, frame3_normal,
-								TANGENT, BINORMAL,
-									quad_blend_weights, imposterTextureNormal);
+									uv_f2, frame2_normal,
+									uv_f3, frame3_normal,
+									TANGENT, BINORMAL,
+									 quad_blend_weights, imposterTextureNormal);
 	ALBEDO = baseTex.rgb * albedo.rgb;
 	NORMAL =normalTex.xyz;
 	
@@ -422,7 +418,7 @@ void fragment()
 		ALPHA = float(baseTex.a>alpha_clamp);
 		ALPHA_SCISSOR_THRESHOLD = 0.5;
 	}
-	METALLIC = ormTex.b * metallic;
+	METALLIC = metallic;
 	SPECULAR = specular;
-	ROUGHNESS = ormTex.g * roughness;
+	ROUGHNESS = roughness;
 }

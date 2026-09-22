@@ -1,4 +1,4 @@
-// FlowLOD impostor shader for Godot 4 / Redot 4 (standard).
+// FlowLOD impostor shader for Godot 4 / Redot 4 (shadows).
 //
 // Ported from Godot-Octahedral-Impostors by wojtekpil (MIT), which targets Godot 3:
 //   https://github.com/wojtekpil/Godot-Octahedral-Impostors
@@ -6,38 +6,25 @@
 // Changes: Godot 4 renames, and a fix for GLSL sign(0.0) collapsing both poles
 // onto the same atlas cell.
 shader_type spatial;
-render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode blend_mix, depth_prepass_alpha, cull_back, unshaded;
 uniform vec4 albedo : source_color = vec4(1, 1, 1, 1);
 uniform float specular = 0.5;
-uniform float metallic = 1.0;
+uniform float metallic = 0.0;
 uniform float roughness : hint_range(0, 1) = 1.0;
 
 uniform sampler2D imposterTextureAlbedo : source_color;
-uniform sampler2D imposterTextureNormal : hint_normal;
-uniform sampler2D imposterTextureDepth : hint_default_white;
-uniform sampler2D imposterTextureOrm : hint_default_white;
 uniform vec2 imposterFrames = vec2(16.0, 16.0);
 uniform vec3 positionOffset = vec3(0.0);
 uniform bool isFullSphere = true;
 uniform float alpha_clamp = 0.5;
-uniform bool dither = false;
 uniform float scale = 1.0;
 uniform float depth_scale : hint_range(0, 1) = 1.0;
-uniform float normalmap_depth : hint_range(-5, 5)  = 1.0;
 uniform float aabb_max = 1.0;
 
 varying vec2 uv_frame1;
 varying vec2 xy_frame1;
 varying flat vec2 frame1;
-varying flat vec3 frame1_normal;
-varying vec2 uv_frame2;
-varying vec2 xy_frame2;
-varying flat vec2 frame2;
-varying flat vec3 frame2_normal;
-varying vec2 uv_frame3;
-varying vec2 xy_frame3;
-varying flat vec2 frame3;
-varying flat vec3 frame3_normal;
+
 varying vec4 quad_blend_weights;
 
 vec3 nonzero_sign(vec3 v)
@@ -287,142 +274,41 @@ void vertex()
 	//convert frame coordinate to octahedron direction
 	vec3 projectedQuadADir = FrameXYToRay(frame1, framesMinusOne);
 	
-	frame2 = clamp(frame1 + mix(vec2(0, 1), vec2(1, 0), quad_blend_weights.w), vec2(0,0), framesMinusOne);
-	vec3 projectedQuadBDir = FrameXYToRay(frame2, framesMinusOne);
-	
-	frame3 = clamp(frame1 + vec2(1), vec2(0,0), framesMinusOne);
-	vec3 projectedQuadCDir = FrameXYToRay(frame3, framesMinusOne);
-
-	frame1_normal = (MODELVIEW_MATRIX *vec4(projectedQuadADir, 0)).xyz;
-	frame2_normal = (MODELVIEW_MATRIX *vec4(projectedQuadBDir, 0)).xyz;
-	frame3_normal = (MODELVIEW_MATRIX *vec4(projectedQuadCDir, 0)).xyz;
-
 	//calcute virtual planes projections
-	vec3 plane_x1, plane_y1, plane_x2, plane_y2, plane_x3, plane_y3;
+	vec3 plane_x1, plane_y1;
 	calcuateXYbasis(projectedQuadADir, plane_x1, plane_y1);
 	uv_frame1 = virtualPlaneUV(projectedQuadADir, plane_x1, plane_y1, pivotToCameraRay, vertexToCameraRay, scale);
 	xy_frame1 = projectOnPlaneBasis(-vertexToCameraDir, projectedQuadADir, plane_x1, plane_y1).xy;
 
-	calcuateXYbasis(projectedQuadBDir, plane_x2, plane_y2);
-	uv_frame2 = virtualPlaneUV(projectedQuadBDir, plane_x2, plane_y2, pivotToCameraRay, vertexToCameraRay, scale);
-	xy_frame2 = projectOnPlaneBasis(-vertexToCameraDir, projectedQuadBDir, plane_x2, plane_y2).xy;
-	
-	calcuateXYbasis(projectedQuadCDir, plane_x3, plane_y3);
-	uv_frame3 = virtualPlaneUV(projectedQuadCDir, plane_x3, plane_y3, pivotToCameraRay, vertexToCameraRay, scale);
-	xy_frame3 = projectOnPlaneBasis(-vertexToCameraDir, projectedQuadCDir, plane_x3, plane_y3).xy;
 
-	//to fragment shader
+
 	//to fragment shader
 	VERTEX.xyz = projected + positionOffset;
 	VERTEX.xyz +=pivotToCameraDir* aabb_max;
+	vec3 v0 = abs(NORMAL.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
 
 	NORMAL = normalize(pivotToCameraDir);
-	TANGENT= normalize(cross(NORMAL,vec3(0.0, 1.0, 0.0)));
+	TANGENT= normalize(cross(NORMAL,v0));
 	BINORMAL = normalize(cross(TANGENT,NORMAL));
 }
 
-vec4 blenderColors(vec2 uv_1, vec2 uv_2, vec2 uv_3, vec4 grid_weights, sampler2D atlasTexture)
-{
-	vec4 quad_a, quad_b, quad_c;
-	
-	quad_a = textureLod(atlasTexture, uv_1, 0.0);
-	quad_b = textureLod(atlasTexture, uv_2, 0.0);
-	quad_c = textureLod(atlasTexture, uv_3, 0.0);
-	return quad_a * grid_weights.x + quad_b * grid_weights.y + quad_c * grid_weights.z;
-}
 
-vec3 normal_from_normalmap(vec4 normalTex, vec3 tangent, vec3 binormal, vec3 f_norm)
-{
-	vec3 normalmap;
-	normalmap.xy = normalTex.xy * 2.0 - 1.0;
-	normalmap.z = sqrt(max(0.0, 1.0 - dot(normalmap.xy, normalmap.xy)));
-	normalmap = normalize(normalmap);
-	return normalize(tangent * normalmap.x + binormal * normalmap.y + f_norm * normalmap.z);
-}
 
-vec3 blendedNormals(vec2 uv_1, vec3 f1_n,
-					vec2 uv_2, vec3 f2_n,
-					vec2 uv_3, vec3 f3_n,
-					vec3 tangent, vec3 binormal,
-					vec4 grid_weights, sampler2D atlasTexture)
-{
-	vec4 quad_a, quad_b, quad_c;
-	quad_a = textureLod(atlasTexture, uv_1, 0.0);
-	quad_b = textureLod(atlasTexture, uv_2, 0.0);
-	quad_c = textureLod(atlasTexture, uv_3, 0.0);
-	vec3 norm1 = normal_from_normalmap(quad_a, tangent, binormal, f1_n);
-	vec3 norm2 = normal_from_normalmap(quad_b, tangent, binormal, f2_n);
-	vec3 norm3 = normal_from_normalmap(quad_c, tangent, binormal, f3_n);
-	return normalize(norm1 * grid_weights.x + norm2 * grid_weights.y + norm3 * grid_weights.z);
-}
-
-vec2 recalculateUV(vec2 uv_f,  vec2 frame, vec2 xy_f, vec2 frame_size, float d_scale, sampler2D depthTexture)
+vec2 recalculateUV(vec2 uv_f,  vec2 frame, vec2 xy_f, vec2 frame_size)
 {
 	//clamp for parallax sampling
 	uv_f = clamp(uv_f, vec2(0), vec2(1));
-	vec2 uv_quad = frame_size * (frame + uv_f);
-	//paralax
-	vec4 n_depth = (textureLod( depthTexture, uv_quad, 0 ));
-	uv_f = xy_f * (0.5-n_depth.r) * d_scale + uv_f;
-	//clamp parallax offset
-	uv_f = clamp(uv_f, vec2(0), vec2(1));
-	uv_f =  frame_size * (frame + uv_f);
-	//clamped full UV
-	return clamp(uv_f, vec2(0), vec2(1));
+	return frame_size * (frame + uv_f);
 }
 
 void fragment()
 {
 	vec2 quad_size = vec2(1.0) / imposterFrames;
-	vec2 uv_f1 = recalculateUV(uv_frame1, frame1, xy_frame1, quad_size, depth_scale, imposterTextureDepth);
-	vec2 uv_f2 = recalculateUV(uv_frame2, frame2, xy_frame2, quad_size, depth_scale, imposterTextureDepth);
-	vec2 uv_f3 = recalculateUV(uv_frame3, frame3, xy_frame3, quad_size, depth_scale, imposterTextureDepth);
+	vec2 uv_f1 = recalculateUV(uv_frame1, frame1, xy_frame1, quad_size);
+	vec4 baseTex = textureLod(imposterTextureAlbedo, uv_f1, 0.0);
 
-	vec4 baseTex = blenderColors(uv_f1, uv_f2,  uv_f3, quad_blend_weights, imposterTextureAlbedo);
-	vec4 ormTex = blenderColors(uv_f1, uv_f2, uv_f3, quad_blend_weights, imposterTextureOrm);
-
-	vec3 normalTex = blendedNormals(uv_f1, frame1_normal,
-								uv_f2, frame2_normal,
-								uv_f3, frame3_normal,
-								TANGENT, BINORMAL,
-									quad_blend_weights, imposterTextureNormal);
-	ALBEDO = baseTex.rgb * albedo.rgb;
-	NORMAL =normalTex.xyz;
-	
-	if(dither)
-	{
-		float opacity =  baseTex.a;
-		int x = int(FRAGCOORD.x) % 4;
-		int y = int(FRAGCOORD.y) % 4;
-		int index = x + y * 4;
-		float limit = 0.0;
-		if (x < 8) {
-			if (index == 0) limit = 0.0625;
-			if (index == 1) limit = 0.5625;
-			if (index == 2) limit = 0.1875;
-			if (index == 3) limit = 0.6875;
-			if (index == 4) limit = 0.8125;
-			if (index == 5) limit = 0.3125;
-			if (index == 6) limit = 0.9375;
-			if (index == 7) limit = 0.4375;
-			if (index == 8) limit = 0.25;
-			if (index == 9) limit = 0.75;
-			if (index == 10) limit = 0.125;
-			if (index == 11) limit = 0.625;
-			if (index == 12) limit = 1.0;
-			if (index == 13) limit = 0.5;
-			if (index == 14) limit = 0.875;
-			if (index == 15) limit = 0.375;
-		}
-		// Is this pixel below the opacity limit? Skip drawing it
-		if (opacity < limit * alpha_clamp)
-		discard;
-	}
-	else {
-		ALPHA = float(baseTex.a>alpha_clamp);
-		ALPHA_SCISSOR_THRESHOLD = 0.5;
-	}
-	METALLIC = ormTex.b * metallic;
-	SPECULAR = specular;
-	ROUGHNESS = ormTex.g * roughness;
+	ALBEDO = baseTex.rgb;
+	ALPHA = float(baseTex.a>alpha_clamp);
+	ALPHA_SCISSOR_THRESHOLD = 0.5;
+	ROUGHNESS = 1.0;
 }

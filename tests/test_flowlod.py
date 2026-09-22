@@ -278,11 +278,17 @@ def main():
           B.mesh_symmetry(sym_mesh, settings) == "X",
           f"detected {B.mesh_symmetry(sym_mesh, settings)}")
 
-    _st, sym_reports = B.bake(sym_obj, settings, [("QUALITY", 0.5), ("QUALITY", 0.25)])
+    # Decimate's use_symmetry makes the collapse pattern symmetric; it does NOT guarantee a
+    # symmetric result. Only symmetrizing the output does, which is what this asserts.
+    sym_settings = A.Settings(**{**settings.__dict__, "symmetrize": True})
+    _st, sym_reports = B.bake(sym_obj, sym_settings, [("QUALITY", 0.5), ("QUALITY", 0.25)])
     for r in sym_reports:
         worst = sym_error(bpy.data.objects[r["name"]].data) / diag
-        check(f"{r['name']} stays symmetric", worst < 1e-6,
+        check(f"{r['name']} is exactly symmetric when symmetrize is on", worst < 1e-6,
               f"worst mirror error {worst:.2e} of bbox diagonal")
+
+    check("UV sidedness is reported so the symmetrize warning can be shown",
+          isinstance(B.uvs_are_mirrored(obj.data), bool))
 
     # ---- normal-map baking ------------------------------------------------------------
     src_mat_names = [m.name if m else None for m in obj.data.materials]

@@ -123,6 +123,13 @@ class FlowLODSettings(PropertyGroup):
         description="A symmetric model that comes back asymmetric is an obvious defect. "
                     "Detected automatically and enforced during reduction",
     )
+    symmetrize: BoolProperty(
+        name="Symmetrize Output", default=False,
+        description="Mirror each LOD exactly about the detected axis. Blender's symmetric "
+                    "decimation alone does NOT guarantee a symmetric result. WARNING: this "
+                    "replaces one half with a mirror of the other, including its UVs, so any "
+                    "asymmetric texture detail will be mirrored",
+    )
     cascade: BoolProperty(
         name="Cascade Levels", default=False,
         description="Reduce each level from the previous one rather than from the source, so the "
@@ -191,6 +198,7 @@ def to_settings(props) -> "analyse.Settings":
         engine=props.engine,
         cascade=props.cascade,
         symmetry=props.symmetry,
+        symmetrize=props.symmetrize,
         bake_normals=props.bake_normals,
         bake_resolution=props.bake_resolution,
         bake_margin=props.bake_margin,
@@ -269,6 +277,10 @@ class FLOWLOD_OT_analyse(Operator):
             f"weld -{stats['verts_saved_pct']:.0f}% | quads {stats['quad_ratio']:.0%} | "
             f"features {stats['feature_edges']} | floor ~{stats['structural_floor']} | "
             f"symmetry {stats['symmetry']}"
+            + (f" (drift {stats['symmetry_drift']['worst']:.1%} worst)"
+               if stats['symmetry'] != "none" else "") +
+            ("" if stats.get("uvs_mirrored", True)
+             else " | UVs unique per side: Symmetrize would mirror them")
         )
         self.report({"INFO"}, obj.flow_lod.cached_stats)
         return {"FINISHED"}
@@ -373,6 +385,7 @@ class FLOWLOD_PT_panel(Panel):
         out.prop(props, "selective_protect")
         out.prop(props, "protect_weight")
         out.prop(props, "symmetry")
+        out.prop(props, "symmetrize")
         out.prop(props, "bake_normals")
         if props.bake_normals:
             row = out.row(align=True)

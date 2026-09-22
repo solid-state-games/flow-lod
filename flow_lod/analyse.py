@@ -108,8 +108,17 @@ class Settings:
     # Decimate can enforce mirror symmetry directly. Measured on a symmetric hull at a 25% budget:
     # without it the worst vertex drifts 2.4e-2 of the bounding diagonal; with it, 1.0e-10.
     # AUTO detects the mirror plane from the mesh itself so this needs no thought.
+    # Blender's Decimate use_symmetry makes the COLLAPSE PATTERN symmetric. It does not make an
+    # approximately-symmetric mesh exact: measured, a perfectly symmetrized input (7.5e-13) still
+    # came out at 1.9e-4 after a symmetric decimation. Only symmetrizing the OUTPUT gives exact
+    # symmetry (9.8e-12), which is what `symmetrize` does.
     symmetry: str = "AUTO"             # AUTO | X | Y | Z | NONE
-    symmetry_tolerance: float = 1e-4   # relative to bbox diagonal
+    # Detection runs on the MEAN, because that is what signals intent: a hull measured 9.8e-05
+    # mean on X (clearly modelled symmetric) against 1.9e-02 on Y and Z (clearly not). Its WORST
+    # vertex was 2.1e-02 off, so judging on the worst case would have rejected a mesh that is
+    # plainly meant to be symmetric. The worst figure is reported instead, as drift.
+    symmetry_tolerance: float = 1e-3   # on the MEAN, relative to bbox diagonal
+    symmetrize: bool = False           # mirror each LOD exactly; see the UV warning
 
     # Normal-map baking. Decimation preserves the source UV layout almost exactly (measured: UV
     # area 0.6521 -> 0.6472, no degenerate or NaN coordinates), so a LOD can reuse the original
@@ -194,7 +203,7 @@ def has_duplicate_verts(bm, dist: float) -> bool:
 
 
 def symmetry_error(bm, axis: int) -> float:
-    """Mean distance from each vertex to the nearest vertex of the mesh mirrored on `axis`.
+    """(mean, worst) distance from each vertex to the nearest vertex of the mesh mirrored on `axis`.
 
     Zero for a perfectly symmetric mesh. Normalised by the bounding diagonal by the caller.
     """
@@ -208,13 +217,16 @@ def symmetry_error(bm, axis: int) -> float:
         tree.insert(co, i)
     tree.balance()
 
-    total = 0.0
+    # Mean alone is misleading: a hull measured 9.8e-05 mean while its WORST vertex was off by
+    # 2.1e-02, two percent of the model. Judge on the worst case.
+    total, worst = 0.0, 0.0
     for co in verts:
         mirrored = co.copy()
         mirrored[axis] = -mirrored[axis]
         _, _, dist = tree.find(mirrored)
         total += dist
-    return total / len(verts)
+        worst = max(worst, dist)
+    return total / len(verts), worst
 
 
 def detect_symmetry(bm, settings: Settings):
@@ -233,10 +245,21 @@ def detect_symmetry(bm, settings: Settings):
     limit = settings.symmetry_tolerance * bbox_diagonal(bm)
     best, best_err = None, limit
     for axis, name in enumerate("XYZ"):
-        err = symmetry_error(bm, axis)
-        if err < best_err:
-            best, best_err = name, err
+        mean, _worst = symmetry_error(bm, axis)
+        if mean < best_err:
+            best, best_err = name, mean
     return best
+
+
+def symmetry_report(bm, settings: Settings) -> dict:
+    """Detected axis plus how far the mesh has actually drifted from symmetry."""
+    axis = detect_symmetry(bm, settings)
+    out = {"axis": axis or "none", "mean": 0.0, "worst": 0.0}
+    if axis:
+        diag = bbox_diagonal(bm)
+        mean, worst = symmetry_error(bm, "XYZ".index(axis))
+        out["mean"], out["worst"] = mean / diag, worst / diag
+    return out
 
 
 def repair(bm, settings: Settings) -> dict:

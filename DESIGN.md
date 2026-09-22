@@ -392,7 +392,32 @@ interpolation, or make the protection far more selective so a vertex-group-drive
 actually reach a budget. Until one of those lands, this tool's reduction is not competitive on
 smooth models and the README says so.
 
-### 7.7 Symmetry
+### 7.7 Symmetry (revised — an earlier claim here was wrong)
+
+An earlier version of this document claimed Blender's `use_symmetry` held symmetry to machine
+precision. That was measured against a mesh this document had already symmetrized itself, which is
+circular. Re-measured properly:
+
+| input | decimated, use_symmetry off | decimated, use_symmetry on |
+|---|---|---|
+| as authored, worst 2.1e-02 | 5.2e-02 | 4.2e-02 |
+| symmetrized first, worst 1.0e-10 | 1.6e-02 | 2.1e-02 |
+
+`use_symmetry` makes the collapse *pattern* symmetric. It does not make geometry symmetric, and it
+does not preserve exact symmetry through a reduction. Only mirroring the output does that
+(`bmesh.ops.symmetrize`, measured worst error 6.7e-09).
+
+**Detection judges on mean, not worst.** One hull measured 9.8e-05 mean on X versus 1.9e-02 on Y
+and Z — unambiguous intent — while its worst vertex was 2.1e-02 off. A worst-case threshold tight
+enough to be meaningful rejects meshes that are plainly modelled symmetric, so the mean decides and
+the worst is reported as drift.
+
+**Symmetrizing has two costs, both surfaced rather than hidden.** It mirrors UVs along with
+geometry, so a model whose sides have unique UVs (measured: 1 shared UV cell of 3,900, becoming
+100% shared afterwards) will mirror its texture detail. And mirroring a half can yield more
+triangles than the asymmetric result, putting the level over budget.
+
+### 7.7b Original symmetry notes
 
 Error-driven simplification has no notion that the left side of a model should match the right, so a
 symmetric asset reliably comes back asymmetric — the worst vertex on a measured hull drifted 2.7% of

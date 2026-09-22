@@ -162,26 +162,42 @@ never edit the asset you baked from, and a test asserts it does not.
 `Bake Size` and `Bake Margin` are exposed. Margin bleeds pixels outside each UV island; too low and
 island edges show striping. A 1024px bake of an 8k-triangle hull takes well under a second.
 
-### Symmetry is detected and preserved
+### Symmetry
 
-A symmetric model that comes back asymmetric is an obvious, visible defect, and it is the default
-outcome of any error-driven simplifier — nothing in a quadric metric knows that the left side
-should match the right.
+A symmetric model that comes back asymmetric is an obvious defect, and it is the default outcome of
+any error-driven simplifier — nothing in a quadric metric knows the left side should match the
+right.
 
-FlowLOD detects the mirror plane from the mesh itself and enforces it during reduction. Measured on
-a symmetric hull, worst-case mirror error as a fraction of the bounding diagonal:
+**Blender's symmetric decimation is not enough on its own.** `use_symmetry` makes the collapse
+*pattern* symmetric, not the geometry. Measured: from a perfectly symmetrized input (worst error
+7.5e-13), a symmetric decimation still produced 1.9e-04. Only mirroring the output gives exact
+symmetry.
 
-| budget | symmetry off | symmetry on |
+So FlowLOD detects the mirror axis and offers **Symmetrize Output**:
+
+| | worst mirror error | triangles |
 |---|---|---|
-| 50% | 1.0e-02 | **1.0e-10** |
-| 25% | 2.7e-02 | **1.0e-10** |
+| off | 2.7e-02 | 2,040 |
+| **on** | **6.7e-09** | 2,456 |
 
-Off, the worst vertex drifts nearly 3% of the model's size. On, symmetry holds to machine
-precision. Detection is automatic (`Symmetry: Auto`); it only recognises mirroring about the
-object's own origin, which is where Blender enforces it, so apply your transforms first.
+Two things to know before switching it on:
 
-Symmetry constrains which edges may collapse, so a level can land slightly under its target. Under
-budget is fine; over budget is what gets corrected.
+- **It mirrors UVs too.** One half is replaced by a mirror of the other, including its texture
+  coordinates. If each side of your model has its own UVs — measured on one hull, 1 shared UV cell
+  out of 3,900 — then after symmetrizing both halves sample the same texture region and any
+  asymmetric detail is mirrored. The Analyse panel says which case you are in.
+- **It can overshoot the budget.** Mirroring a half may yield more triangles than the asymmetric
+  result did (2,456 against a 2,042 target above). The report flags the level as over budget rather
+  than hiding it.
+
+Detection judges on **mean** error, because that is what signals intent: one hull measured 9.8e-05
+on X against 1.9e-02 on Y and Z. Its *worst* vertex was 2.1e-02 off, so judging on the worst case
+would reject a mesh plainly modelled symmetric. The panel reports that worst figure as drift, so
+you can see how far the source has wandered — 2% drift usually means the source itself wants
+symmetrizing, not the LOD.
+
+Detection only finds mirroring about the object's **own origin**, which is where Blender enforces
+it, so apply transforms first.
 
 ### Preprocessing is opt-in, because it is not free
 
@@ -254,7 +270,7 @@ If you are batching hundreds of assets through the CLI, that difference is the w
 blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 ```
 
-46 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
+47 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
 damage budgets, attribute survival, structure fidelity versus the Decimate baseline, and addon
 registration. No mocks; the mesh is the fixture.
 

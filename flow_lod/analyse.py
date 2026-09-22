@@ -111,6 +111,16 @@ class Settings:
     symmetry: str = "AUTO"             # AUTO | X | Y | Z | NONE
     symmetry_tolerance: float = 1e-4   # relative to bbox diagonal
 
+    # Normal-map baking. Decimation preserves the source UV layout almost exactly (measured: UV
+    # area 0.6521 -> 0.6472, no degenerate or NaN coordinates), so a LOD can reuse the original
+    # textures unchanged. The only thing worth rebaking is the geometry that was removed, captured
+    # as a tangent-space normal map projected from the source.
+    bake_normals: bool = False
+    bake_resolution: int = 1024
+    bake_margin: int = 8               # pixels bled outside each island, stops edge striping
+    cage_factor: float = 0.02          # of the largest dimension
+    ray_factor: float = 0.05
+
     remark_sharp: bool = False         # re-derive sharp edges instead of transferring normals
     transfer_normals: bool = False     # real custom-normal transfer, for meshes where 2.3 fails
 

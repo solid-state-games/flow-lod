@@ -284,6 +284,49 @@ def main():
         check(f"{r['name']} stays symmetric", worst < 1e-6,
               f"worst mirror error {worst:.2e} of bbox diagonal")
 
+    # ---- normal-map baking ------------------------------------------------------------
+    src_mat_names = [m.name if m else None for m in obj.data.materials]
+    src_node_counts = [len(m.node_tree.nodes) if (m and m.use_nodes) else 0
+                       for m in obj.data.materials]
+
+    bake_settings = A.Settings(**{**settings.__dict__,
+                                 "bake_normals": True, "bake_resolution": 256})
+    _bs, bake_reports = B.bake(obj, bake_settings, [("QUALITY", 0.2)])
+    br = bake_reports[0]
+    baked = bpy.data.images.get(br.get("baked_normal", "")) if br.get("baked_normal") else None
+
+    check("normal map bakes", baked is not None, f"{br.get('baked_normal')}")
+    if baked is not None:
+        pixels = list(baked.pixels)
+        # a blank tangent-space map is flat (0.5, 0.5, 1.0); real detail is not
+        nonflat = sum(1 for i in range(0, len(pixels), 4) if abs(pixels[i] - 0.5) > 0.02)
+        check("baked normal map contains detail", nonflat > 0.2 * 256 * 256,
+              f"{100 * nonflat / (256 * 256):.0f}% non-flat pixels")
+
+    # The LOD shares material datablocks with the source; baking must never edit the source's.
+    check("baking leaves the source materials untouched",
+          [m.name if m else None for m in obj.data.materials] == src_mat_names
+          and [len(m.node_tree.nodes) if (m and m.use_nodes) else 0
+               for m in obj.data.materials] == src_node_counts,
+          "source material node graphs unchanged")
+
+    lod_b = bpy.data.objects[br["name"]]
+    own_materials = all(m is None or m not in set(obj.data.materials)
+                        for m in lod_b.data.materials)
+    check("baked LOD gets its own material copies", own_materials)
+
+    wired = False
+    for m in lod_b.data.materials:
+        if m is None or not m.use_nodes:
+            continue
+        principled = next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if principled and principled.inputs["Normal"].links:
+            linked = principled.inputs["Normal"].links[0].from_node
+            # exactly one normal source, or the source map would be applied twice
+            if linked.type == "NORMAL_MAP" and len(principled.inputs["Normal"].links) == 1:
+                wired = True
+    check("baked map is wired into the LOD material exactly once", wired)
+
     # ---- registration -----------------------------------------------------------------
     import flow_lod
     try:

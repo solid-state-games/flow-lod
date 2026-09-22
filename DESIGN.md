@@ -431,6 +431,29 @@ log(triangles) and the knee scores cluster indistinguishably (0.0020 / 0.0018 / 
 one asset). There is no natural breakpoint in this asset class, so knee-finding would return an
 arbitrary answer. Their framing of the problem was adopted; their solution was not.
 
+### 7.9 Normal-map baking
+
+Blender bakes high-to-low projection natively (`bake(use_selected_to_active=True)` with a cage and
+a ray limit), so no third-party addon is required. TexTools was evaluated for this and is not
+needed; it also carries no declared licence, so its code could not be used here regardless.
+
+Three findings shaped the implementation:
+
+1. **Colour maps need no rebaking.** Decimation preserves the source UV layout nearly exactly --
+   measured UV area 0.6521 -> 0.6472, no degenerate or NaN coordinates, and island occupancy shows
+   the unwrap is non-overlapping. Every LOD still addresses the original texture set, so only lost
+   geometry is worth capturing.
+2. **The source's material normals composite in.** Blender's NORMAL pass bakes shading normals, so
+   an existing bump or normal chain on the source appears in the result. Verified visually by
+   adding a low-frequency bump to the source and comparing bakes. A naive stdev metric *fell*
+   (0.151 -> 0.128) and suggested the opposite, because smooth low-frequency content dilutes sharp
+   geometric detail -- a reminder that a summary statistic can invert the answer.
+   Consequence: the LOD's inherited normal link must be removed before the baked map is connected,
+   or the source detail is applied twice.
+3. **Materials must be copied first.** LODs receive the source's material datablocks by reference.
+   Adding bake nodes to them would silently edit the source asset. The LOD now gets its own copies,
+   and a test asserts the source's node graphs are unchanged after a bake.
+
 ---
 
 ## 8. Stage 4 — Bake
@@ -519,6 +542,9 @@ Exit code is non-zero if any level fell through to unconstrained QEM, so it can 
 - **pyfqmr / fast_simplification / open3d** — all publish wheels matching Blender's Python
   (cp311, macOS ARM among others), so any of them could be bundled. None were, because Blender's
   own Decimate already wins and costs nothing to ship.
+- **TexTools-Blender** — a well-regarded UV and baking toolset, but the projection baking it
+  wraps is native to Blender and is used directly here. The repository declares no licence
+  (`NOASSERTION`), so its code could not have been reused in an MIT project anyway.
 - **Simplygon** — the commercial state of the art and a useful design reference (cascaded chains,
   remeshing proxies with hole filling, an isotropicity control over the sliver/fit tradeoff).
   Proprietary, and integrates through a glTF round trip, so it cannot be bundled.

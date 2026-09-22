@@ -141,6 +141,27 @@ rates suit heterogeneous geometry badly. Their knee-of-the-curve heuristic was m
 did not transfer — on four hard-surface hulls the error curve is close to linear in log(triangles)
 with no meaningful knee, so the curve is used as a calibration rather than for breakpoint finding.
 
+### Normal-map baking
+
+Reduction throws geometry away; a normal map puts the look of it back. Blender does high-to-low
+projection natively, so this needs no extra addon and no dependency — `Bake Normal Map` in the
+Output section projects the source onto each LOD.
+
+**Colour textures do not need rebaking.** Decimation preserves the source UV layout almost exactly
+(UV area 0.6521 → 0.6472 measured, no degenerate or NaN coordinates, non-overlapping islands), so
+every LOD still addresses the original texture set. Only the lost *geometry* is worth capturing.
+
+**The source's own normal map is included.** Blender bakes shading normals, not just geometry, so
+an existing normal or bump chain on the source composites into the result. That is why FlowLOD
+disconnects the LOD's inherited normal input before wiring the baked map in — otherwise the source
+detail would be applied twice, once baked and once live.
+
+The LOD is given **its own copies** of the source materials before any node is touched. Baking must
+never edit the asset you baked from, and a test asserts it does not.
+
+`Bake Size` and `Bake Margin` are exposed. Margin bleeds pixels outside each UV island; too low and
+island edges show striping. A 1024px bake of an 8k-triangle hull takes well under a second.
+
 ### Symmetry is detected and preserved
 
 A symmetric model that comes back asymmetric is an obvious, visible defect, and it is the default
@@ -233,7 +254,7 @@ If you are batching hundreds of assets through the CLI, that difference is the w
 blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 ```
 
-41 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
+46 checks against real geometry — repair losslessness, quad recovery, budget adherence, topology
 damage budgets, attribute survival, structure fidelity versus the Decimate baseline, and addon
 registration. No mocks; the mesh is the fixture.
 

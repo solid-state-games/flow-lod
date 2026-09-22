@@ -354,6 +354,10 @@ def bake(obj, settings: Settings, levels) -> list:
             mod.data_types_loops = {"CUSTOM_NORMAL"}
             mod.loop_mapping = "POLYINTERP_NEAREST"
 
+        if settings.bake_normals:
+            img = bake_normal_map(lod, obj, settings, f"{name}_normal")
+            report["baked_normal"] = img.name if img else "failed"
+
         report["symmetry"] = next(
             (d.get("symmetry") for _n, d in report.get("tiers", []) if isinstance(d, dict)
              and "symmetry" in d), "none")
@@ -364,6 +368,103 @@ def bake(obj, settings: Settings, levels) -> list:
     obj.hide_set(True)
     obj.hide_render = True
     return stats, reports
+
+
+def bake_normal_map(low, high, settings: Settings, name: str):
+    """Project the source geometry onto the LOD as a tangent-space normal map.
+
+    Blender does high-to-low projection natively -- `bake(use_selected_to_active=True)` with a cage
+    and a ray limit. No addon is needed for this, and because the LOD inherits the source UV layout
+    the map lands on a usable, non-overlapping unwrap for free.
+
+    Returns the image, or None if baking is unavailable.
+    """
+    if not low.data.uv_layers:
+        return None
+
+    scene = bpy.context.scene
+    previous_engine = scene.render.engine
+    image = bpy.data.images.new(name, settings.bake_resolution, settings.bake_resolution,
+                                alpha=False, float_buffer=False)
+    image.colorspace_settings.name = "Non-Color"
+
+    # Every material slot needs the target image as its active node, because the bake writes to
+    # whichever image node is active in each material it touches.
+    if not low.data.materials:
+        low.data.materials.append(bpy.data.materials.new(f"{name}_mat"))
+
+    # The LOD shares its material datablocks with the source. Adding bake nodes to them would
+    # edit the SOURCE asset's materials, which is never acceptable -- give the LOD its own copies
+    # before touching anything.
+    for i, slot_mat in enumerate(low.data.materials):
+        if slot_mat is not None:
+            own = slot_mat.copy()
+            own.name = f"{name}_{slot_mat.name}"
+            low.data.materials[i] = own
+
+    targets = []
+    for slot_mat in low.data.materials:
+        if slot_mat is None:
+            continue
+        slot_mat.use_nodes = True
+        node = slot_mat.node_tree.nodes.new("ShaderNodeTexImage")
+        node.image = image
+        node.location = (-900, -400)
+        slot_mat.node_tree.nodes.active = node
+        targets.append((slot_mat, node))
+
+    extent = max(high.dimensions) or 1.0
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = 1
+    scene.render.bake.use_selected_to_active = True
+    scene.render.bake.use_clear = True
+    scene.render.bake.margin = settings.bake_margin
+
+    was_hidden, was_hidden_render = low.hide_get(), high.hide_render
+    high.hide_render = False
+    high.hide_set(False)
+    low.hide_set(False)
+    bpy.ops.object.select_all(action="DESELECT")
+    high.select_set(True)
+    low.select_set(True)
+    bpy.context.view_layer.objects.active = low
+
+    try:
+        bpy.ops.object.bake(
+            type="NORMAL", normal_space="TANGENT", use_selected_to_active=True,
+            cage_extrusion=extent * settings.cage_factor,
+            max_ray_distance=extent * settings.ray_factor,
+            margin=settings.bake_margin,
+        )
+    except Exception:
+        for slot_mat, node in targets:
+            slot_mat.node_tree.nodes.remove(node)
+        bpy.data.images.remove(image)
+        scene.render.engine = previous_engine
+        low.hide_set(was_hidden)
+        high.hide_render = was_hidden_render
+        return None
+
+    # Wire it in so the LOD actually renders and exports with the detail, rather than the bake
+    # being an orphan image nobody references.
+    for slot_mat, node in targets:
+        tree = slot_mat.node_tree
+        normal_map = tree.nodes.new("ShaderNodeNormalMap")
+        normal_map.location = (-600, -400)
+        tree.links.new(node.outputs["Color"], normal_map.inputs["Color"])
+        principled = next((n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if principled is not None:
+            # The bake already contains the source's own normal map -- Blender bakes shading
+            # normals, not just geometry -- so the previous chain must be disconnected or the
+            # detail would be applied twice.
+            for link in list(principled.inputs["Normal"].links):
+                tree.links.remove(link)
+            tree.links.new(normal_map.outputs["Normal"], principled.inputs["Normal"])
+
+    scene.render.engine = previous_engine
+    low.hide_set(was_hidden)
+    high.hide_render = was_hidden_render
+    return image
 
 
 def format_report(stats: dict, reports: list) -> str:
@@ -385,6 +486,7 @@ def format_report(stats: dict, reports: list) -> str:
             f"quads {r['quad_ratio']:.0%}, tier={r['deepest_tier_name']}, "
             f"chords={'on' if r.get('chords_used') else 'off'}, "
             f"sym={r.get('symmetry', 'none')}, "
+            f"{('normal=' + r['baked_normal'] + ', ') if r.get('baked_normal') else ''}"
             f"{r['seconds']:.1f}s{flag}"
         )
     return "\n".join(lines)

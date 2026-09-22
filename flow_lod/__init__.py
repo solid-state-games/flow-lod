@@ -146,6 +146,18 @@ class FlowLODSettings(PropertyGroup):
         description="Copy custom split normals from the source instead of re-deriving them",
     )
 
+    bake_normals: BoolProperty(
+        name="Bake Normal Map", default=False,
+        description="Project the source geometry onto each LOD as a tangent-space normal map, "
+                    "recovering the detail that reduction removed. LODs already inherit the "
+                    "source UVs, so the existing colour textures still apply unchanged",
+    )
+    bake_resolution: IntProperty(name="Bake Size", default=1024, min=64, max=8192)
+    bake_margin: IntProperty(
+        name="Bake Margin", default=8, min=0, max=64,
+        description="Pixels bled outside each UV island. Too low and island edges show striping",
+    )
+
     report: StringProperty(default="")
     cached_stats: StringProperty(default="")
 
@@ -179,6 +191,9 @@ def to_settings(props) -> "analyse.Settings":
         engine=props.engine,
         cascade=props.cascade,
         symmetry=props.symmetry,
+        bake_normals=props.bake_normals,
+        bake_resolution=props.bake_resolution,
+        bake_margin=props.bake_margin,
         protect_weight=props.protect_weight,
         remark_sharp=props.remark_sharp,
         transfer_normals=props.transfer_normals,
@@ -358,6 +373,11 @@ class FLOWLOD_PT_panel(Panel):
         out.prop(props, "selective_protect")
         out.prop(props, "protect_weight")
         out.prop(props, "symmetry")
+        out.prop(props, "bake_normals")
+        if props.bake_normals:
+            row = out.row(align=True)
+            row.prop(props, "bake_resolution")
+            row.prop(props, "bake_margin")
         out.prop(props, "engine")
         out.prop(props, "cascade")
         out.prop(props, "remark_sharp")

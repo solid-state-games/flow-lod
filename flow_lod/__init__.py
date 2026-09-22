@@ -25,10 +25,10 @@ from bpy.props import (
 )
 from bpy.types import Operator, Panel, PropertyGroup, UIList
 
-from . import analyse, bake, simplify
+from . import analyse, bake
 
 # reload support for development
-for _m in (analyse, simplify, bake):
+for _m in (analyse, bake):
     importlib.reload(_m)
 
 
@@ -70,17 +70,6 @@ class FlowLODSettings(PropertyGroup):
     )
     corner_angle: FloatProperty(name="Corner Angle (deg)", default=180.0, min=0.0, max=180.0)
 
-    use_chords: EnumProperty(
-        name="Chord Collapse",
-        items=[
-            ("AUTO", "Auto", "On for quad-modelled sources, off for triangulated imports"),
-            ("ALWAYS", "Always", "Keep quad loops even where error-driven collapse is more accurate"),
-            ("NEVER", "Never", "Pure error-driven collapse, highest geometric fidelity"),
-        ],
-        default="AUTO",
-        description="Removing whole quad rows keeps loop structure but is density-uniform, which "
-                    "costs geometric fidelity on hulls with varying curvature",
-    )
 
     weld: BoolProperty(
         name="Weld First", default=True,
@@ -100,16 +89,6 @@ class FlowLODSettings(PropertyGroup):
     protect_boundary: BoolProperty(name="Boundary", default=True)
     protect_curvature: BoolProperty(name="Curvature", default=True)
 
-    engine: EnumProperty(
-        name="Engine",
-        items=[
-            ("DECIMATE", "Decimate", "Blender's built-in collapse. Faster and measurably better"),
-            ("PYTHON", "Python QEM", "This addon's own half-edge collapse. Slower and worse; "
-                                     "kept so the comparison stays reproducible"),
-        ],
-        default="DECIMATE",
-        description="Which reduction engine does the work",
-    )
     symmetry: EnumProperty(
         name="Symmetry",
         items=[
@@ -201,14 +180,12 @@ def to_settings(props) -> "analyse.Settings":
         detriangulate=props.detriangulate,
         feature_angle=props.feature_angle,
         corner_angle=props.corner_angle,
-        use_chords=props.use_chords,
         protect_seams=props.protect_seams,
         protect_sharp=props.protect_sharp,
         protect_materials=props.protect_materials,
         protect_boundary=props.protect_boundary,
         protect_curvature=props.protect_curvature,
         selective_protect=props.selective_protect,
-        engine=props.engine,
         cascade=props.cascade,
         symmetry=props.symmetry,
         symmetrize=props.symmetrize,
@@ -386,7 +363,6 @@ class FLOWLOD_PT_panel(Panel):
         flow.label(text="Flow")
         flow.prop(props, "feature_angle")
         flow.prop(props, "corner_angle")
-        flow.prop(props, "use_chords")
         grid = flow.grid_flow(columns=3, even_columns=True)
         for name in ("protect_seams", "protect_sharp", "protect_materials",
                      "protect_boundary", "protect_curvature"):
@@ -409,7 +385,6 @@ class FLOWLOD_PT_panel(Panel):
             row = out.row(align=True)
             row.prop(props, "bake_resolution")
             row.prop(props, "bake_margin")
-        out.prop(props, "engine")
         out.prop(props, "cascade")
         out.prop(props, "remark_sharp")
         out.prop(props, "transfer_normals")

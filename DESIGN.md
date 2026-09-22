@@ -144,6 +144,31 @@ The source object is never modified. Everything runs on a bmesh copy.
 
 ---
 
+## 3b. Stage 0a — Clean
+
+Generated meshes carry junk that no simplifier handles well. Measured across four assets:
+
+| asset | loose parts | fragments <10 faces | non-manifold | open edges |
+|---|---|---|---|---|
+| A | 1 | 0 | 0 | 0 |
+| B | 2 | 1 | 17 | 40 |
+| C | 3 | 0 | 4 | 183 |
+| D | 14 | 6 | 113 | 179 |
+
+`clean()` removes orphan fragments, dissolves degenerate geometry and makes normals consistent. A
+part is deleted only when it is BOTH a negligible share of the faces AND physically tiny; either
+test alone is unsafe, since a small antenna is few faces but not tiny.
+
+**Ordering is critical and was got wrong first.** Clean must run AFTER the weld. On an unwelded mesh
+every triangle is its own island — one asset reported 1,149 "parts" before welding and 1 after — so
+fragment removal eats the model. Before the fix, a hull lost 28% of its volume. A volume-drift
+assertion now guards this.
+
+Measured effect after the fix: the dirtiest asset lost 5 fragments and 26 faces for 0.09% volume
+change; two assets were untouched; one had inconsistent normals corrected. Cleanup is cheap and
+safe, but it is not where the big reduction is — that is hidden-geometry removal, which is not yet
+built.
+
 ## 4. Stage 0 — Repair
 
 `bmesh.ops.remove_doubles` at `weld_factor × bounding-box diagonal`, default `1e-5`. Scale-relative,
@@ -585,6 +610,22 @@ Exit code is non-zero if any level fell through to unconstrained QEM, so it can 
   remeshing proxies with hole filling, an isotropicity control over the sliver/fit tradeoff).
   Proprietary, and integrates through a glTF round trip, so it cannot be bundled.
 
+## 10c. Deletions
+
+Features are removed when measurement says they do not earn their place. Removed so far:
+
+- **The pure-Python quadric simplifier** (529 lines). Lost to Blender's Decimate by 12-17 F1 points
+  at every budget, ran 50x slower, and missed targets Decimate hit exactly. Its measurements are in
+  §7.5 and §7.6; the code is in git history if ever needed.
+- **Chord collapse and the whole three-tier structure.** Only ever enabled for quad-dominant
+  sources, which no measured asset was, and measured worse where it did apply (§7.5).
+
+An audit prompted by this found that with default settings the feature classification no longer
+affected output at all: `protect_weight` is 0 because protection measured harmful, and
+`remark_sharp` is off. The classification is retained because the structural-floor warning,
+symmetry detection and the optional protect/sharp paths still use it — but the honest description
+of this tool is a workflow around Decimate, not a novel simplifier.
+
 ## 11. Scope
 
 **In, v1:** weld repair · quad recovery · feature + chord analysis · three-tier simplification ·
@@ -619,8 +660,11 @@ sharp re-marking · single-object UI · headless CLI · Godot/glTF output.
 - arXiv 2411.16874 (2024), *Single Edge Collapse Quad-Dominant Mesh Reduction* — dihedral-weighted
   quadrics. No code released.
 
-**Studied, not copied:** Optiloops (GPL), MeshLab / VCGlib (GPL). Algorithms are not copyrightable;
-implementations are. Everything here is written from the papers.
+**On reading GPL projects.** Copyright protects expression, not ideas or algorithms. Reading a GPL
+implementation to understand a technique and then writing a fresh implementation is fine; what
+creates a derivative work is copying code, or translating it line by line and carrying its
+structure and naming across. So Optiloops, MeshLab/VCGlib and TexTools are all fair to read. No
+code was taken from any of them, and everything here was written from the papers.
 
 **Considered and rejected:** meshoptimizer (MIT, excellent) — triangles-only, and requires a compiled
 wheel per platform for meshes small enough that pure Python is sub-second.

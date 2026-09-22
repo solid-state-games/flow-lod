@@ -15,7 +15,6 @@ from .analyse import (
     FEATURE, LOCKED, Settings, analyse, detect_symmetry, prepare, protect_vertices, symmetry_report,
     tri_count, quad_ratio,
 )
-from .simplify import collapse_chords, simplify_to
 
 
 CURVE_RATIOS = (0.9, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.08, 0.05, 0.03)
@@ -133,7 +132,7 @@ def _mark_sharp(bm, settings: Settings):
 
 def _needs_no_prep(me, settings: Settings) -> bool:
     """True when every preprocessing stage would be a no-op for this mesh and these settings."""
-    if settings.detriangulate or settings.use_chords == "ALWAYS":
+    if settings.detriangulate or settings.clean:
         return False
     if settings.protect_weight > 0.0 or settings.remark_sharp:
         return False
@@ -341,7 +340,7 @@ def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None
     # Fast path: when nothing needs preprocessing, hand the untouched mesh straight to Decimate.
     # A bmesh round trip is not free -- measured, it costs several F1 points on an already-clean
     # mesh -- so the cheapest correct thing is to not do one.
-    if settings.engine == "DECIMATE" and _needs_no_prep(base, settings):
+    if _needs_no_prep(base, settings):
         axis = mesh_symmetry(base, settings)
         me, dec = decimate_mesh(base.copy(), target, None, settings, axis=axis)
         dec["symmetry"] = axis or "none"
@@ -353,7 +352,7 @@ def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None
         final = sum(len(p.vertices) - 2 for p in me.polygons)
         return lod, {
             "target": target, "start_tris": sum(len(p.vertices) - 2 for p in base.polygons),
-            "tiers": [("decimate-direct", dec)], "chords_used": False, "protected": 0,
+            "tiers": [("decimate-direct", dec)], "protected": 0,
             "deepest_tier": 0, "deepest_tier_name": "decimate-direct",
             "final_tris": final, "final_verts": len(me.vertices), "quad_ratio": 0.0,
             "hit_budget": final <= target * 1.02, "prepare": {"skipped": True},
@@ -365,51 +364,30 @@ def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None
     was_quad = quad_ratio(bm) >= settings.quad_skip_ratio
     prep = prepare(bm, settings)
 
-    if settings.engine == "PYTHON":
-        report = simplify_to(bm, settings, target, source_was_quad_dominant=was_quad)
-        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
-        if settings.remark_sharp:
-            _mark_sharp(bm, settings)
-        me = bpy.data.meshes.new(name)
-        bm.to_mesh(me)
-        bm.free()
-    else:
-        # Optional structured pass first: whole quad rows are the most modeller-like reduction
-        # available, and they are nearly free. Decimate finishes the job.
-        report = {"target": target, "start_tris": tri_count(bm), "tiers": []}
-        chords_on = settings.use_chords == "ALWAYS" or (
-            settings.use_chords == "AUTO" and was_quad
-        )
-        report["chords_used"] = chords_on
-        if chords_on:
-            floor = max(target, int(report["start_tris"] * settings.chord_floor))
-            if tri_count(bm) > floor:
-                r = collapse_chords(bm, settings, floor, whole_only=False)
-                if r["rows_collapsed"]:
-                    report["tiers"].append(("chord-segment", r))
+    report = {"target": target, "start_tris": tri_count(bm), "tiers": []}
 
-        an = analyse(bm, settings)
-        protect = protect_vertices(bm, an.edge_class, settings)
-        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
-        if settings.remark_sharp:
-            _mark_sharp(bm, settings)
-        staged = bpy.data.meshes.new(name + "_stage")
-        bm.to_mesh(staged)
-        bm.free()
+    an = analyse(bm, settings)
+    protect = protect_vertices(bm, an.edge_class, settings)
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+    if settings.remark_sharp:
+        _mark_sharp(bm, settings)
+    staged = bpy.data.meshes.new(name + "_stage")
+    bm.to_mesh(staged)
+    bm.free()
 
-        axis = mesh_symmetry(staged, settings)
-        me, dec = decimate_mesh(staged, target, protect, settings, axis=axis)
-        dec["symmetry"] = axis or "none"
-        me.name = name
-        bpy.data.meshes.remove(staged)
-        report["tiers"].append(("decimate", dec))
-        report["protected"] = len(protect)
-        report["deepest_tier"] = 0
-        report["deepest_tier_name"] = "decimate"
-        report["final_tris"] = sum(len(p.vertices) - 2 for p in me.polygons)
-        report["final_verts"] = len(me.vertices)
-        report["quad_ratio"] = 0.0
-        report["hit_budget"] = report["final_tris"] <= target * 1.02
+    axis = mesh_symmetry(staged, settings)
+    me, dec = decimate_mesh(staged, target, protect, settings, axis=axis)
+    dec["symmetry"] = axis or "none"
+    me.name = name
+    bpy.data.meshes.remove(staged)
+    report["tiers"].append(("decimate", dec))
+    report["protected"] = len(protect)
+    report["deepest_tier"] = 0
+    report["deepest_tier_name"] = "decimate"
+    report["final_tris"] = sum(len(p.vertices) - 2 for p in me.polygons)
+    report["final_verts"] = len(me.vertices)
+    report["quad_ratio"] = 0.0
+    report["hit_budget"] = report["final_tris"] <= target * 1.02
 
     lod = bpy.data.objects.new(name, me)
     lod.matrix_world = obj.matrix_world.copy()
@@ -624,7 +602,6 @@ def format_report(stats: dict, reports: list) -> str:
         lines.append(
             f"  {r['name']}: {r['final_tris']} tris, {r['final_verts']} verts, "
             f"quads {r['quad_ratio']:.0%}, tier={r['deepest_tier_name']}, "
-            f"chords={'on' if r.get('chords_used') else 'off'}, "
             f"sym={r.get('symmetry', 'none')}, "
             f"{('normal=' + r['baked_normal'] + ', ') if r.get('baked_normal') else ''}"
             f"{'symmetrized, ' if r.get('symmetrized') else ''}"

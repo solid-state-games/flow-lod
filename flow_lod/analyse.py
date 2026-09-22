@@ -34,9 +34,18 @@ class Settings:
     # Measured on an already-clean hull, preprocessing alone scored F1 94.2% against the raw
     # source with ZERO reduction applied -- 6 points given away before any work was done.
     # So each one is now opt-in or auto-detected, and the analyser says when it would help.
+    # Generated meshes arrive with junk no simplifier handles well: orphan fragments, unintended
+    # holes, non-manifold edges. Measured across four assets, one carried 14 disconnected parts,
+    # six of them under 10 faces. Cleaning first is cheap and compounds -- fewer junk triangles in
+    # means better LODs out.
+    clean: bool = True
+    min_part_faces: float = 0.002      # fraction of total faces below which a part is a fragment
+    min_part_size: float = 0.02        # and below this fraction of the model diagonal
+    fix_normals: bool = True
+
     weld: bool = True                  # auto-skipped when the mesh has no duplicate vertices
     weld_factor: float = 1e-5          # relative to bounding-box diagonal
-    detriangulate: bool = False        # costs fidelity; turn on when you want quads or chords
+    detriangulate: bool = False        # costs fidelity on smooth meshes; opt in
 
     # A FIXED angle cannot serve two asset classes. Measured, share of edges above a threshold:
     #
@@ -62,41 +71,20 @@ class Settings:
     # density-uniform, so on a hull whose curvature varies it deviates more than error-driven
     # collapse does. It is still the right tool for genuinely quad-modelled assets, where even
     # topology and loop structure are the point -- hence "auto".
-    use_chords: str = "AUTO"           # AUTO | ALWAYS | NEVER
 
-    # Chord collapse removes whole quad rows, which is density-uniform. Pushed far enough it
-    # eats every row a shape needs and the silhouette collapses -- measured on a subdivided test
-    # asset, a 10% budget reached via chords alone flattened the form entirely. Hand over to
-    # error-driven collapse below this fraction of the repaired source, where preserving the
-    # shape matters more than preserving the loops.
-    chord_floor: float = 0.25
 
     protect_seams: bool = True
     protect_sharp: bool = True
     protect_materials: bool = True
     protect_boundary: bool = True
     protect_curvature: bool = True
-
-    quad_skip_ratio: float = 0.6       # already quad-dominant -> don't bother de-triangulating
-    min_segment: int = 3               # tier 2: shortest chord run worth dissolving
+    quad_skip_ratio: float = 0.6
 
     # Protect only junctions where feature lines meet plus hard boundaries (~8% of verts), not
     # the interior of every crease (~52%). Measured: at 52% protected, Blender's Decimate stalls
     # at 4516 tris against a 4084 target and cannot reach any aggressive budget at all.
     selective_protect: bool = True
 
-    # Reduction engine. Blender's Decimate is optimal-position QEM in C and beats this addon's
-    # own pure-Python half-edge implementation by 12-17 F1 points at every budget while running
-    # instantly (0.0s vs 5-9s) and always hitting the target. Measured on a smooth reference
-    # hull against the raw source:
-    #
-    #             50%    25%    10%
-    #   Decimate  94.4%  87.5%  78.6%
-    #   PYTHON    82.2%  71.6%  61.5%   (and missed the 10% budget entirely)
-    #
-    # ponytail: do not reimplement, worse, what is already in the box. PYTHON is kept only so
-    # the comparison stays reproducible.
-    engine: str = "DECIMATE"           # DECIMATE | PYTHON
 
     # Measured: protection does not help and at aggressive budgets it stops the target being
     # reached at all (1684 tris against an 816 target). Off unless asked for.
@@ -265,6 +253,76 @@ def symmetry_report(bm, settings: Settings) -> dict:
         mean, worst = symmetry_error(bm, "XYZ".index(axis))
         out["mean"], out["worst"] = mean / diag, worst / diag
     return out
+
+
+def loose_parts(bm) -> list:
+    """Connected face components, largest first."""
+    bm.faces.ensure_lookup_table()
+    seen = set()
+    parts = []
+    for face in bm.faces:
+        if face.index in seen:
+            continue
+        stack, component = [face], []
+        while stack:
+            current = stack.pop()
+            if current.index in seen:
+                continue
+            seen.add(current.index)
+            component.append(current)
+            for edge in current.edges:
+                for neighbour in edge.link_faces:
+                    if neighbour.index not in seen:
+                        stack.append(neighbour)
+        parts.append(component)
+    parts.sort(key=len, reverse=True)
+    return parts
+
+
+def clean(bm, settings: Settings) -> dict:
+    """Remove generated-mesh junk: orphan fragments, degenerate geometry, inconsistent normals.
+
+    A part is only deleted when it is BOTH a negligible share of the faces AND physically tiny.
+    Either test alone is unsafe -- a small antenna is few faces but not tiny, and a coarse hull
+    shell is large but could be few faces.
+    """
+    stats = {"cleaned": False}
+    if not settings.clean or not bm.faces:
+        return stats
+
+    before_faces, before_verts = len(bm.faces), len(bm.verts)
+    diagonal = bbox_diagonal(bm)
+
+    parts = loose_parts(bm)
+    face_floor = max(1, int(len(bm.faces) * settings.min_part_faces))
+    size_floor = diagonal * settings.min_part_size
+
+    doomed = []
+    fragments = 0
+    for part in parts[1:]:                       # never touch the largest component
+        if len(part) >= face_floor:
+            continue
+        coords = [v.co for f in part for v in f.verts]
+        extent = max((a - b).length for a in coords[:24] for b in coords[:24]) if coords else 0.0
+        if extent < size_floor:
+            doomed.extend(part)
+            fragments += 1
+
+    if doomed:
+        bmesh.ops.delete(bm, geom=doomed, context="FACES")
+
+    bmesh.ops.dissolve_degenerate(bm, dist=diagonal * 1e-7, edges=bm.edges[:])
+    if settings.fix_normals:
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+
+    stats.update({
+        "cleaned": True,
+        "parts_before": len(parts),
+        "fragments_removed": fragments,
+        "faces_removed": before_faces - len(bm.faces),
+        "verts_removed": before_verts - len(bm.verts),
+    })
+    return stats
 
 
 def repair(bm, settings: Settings) -> dict:
@@ -587,6 +645,11 @@ def analyse(bm, settings: Settings) -> Analysis:
 
 def prepare(bm, settings: Settings) -> dict:
     """Stages 0 and 1: repair then quad recovery. Returns merged stats."""
+    # Order matters and is not obvious: clean MUST follow the weld. On an unwelded mesh every
+    # triangle is its own disconnected island -- one asset reported 1,149 "parts" before welding
+    # and 1 after -- so fragment removal would eat the model. Measured before this was fixed, a
+    # hull lost 28% of its volume.
     stats = {"repair": repair(bm, settings)}
+    stats["clean"] = clean(bm, settings)
     stats["detriangulate"] = detriangulate(bm, settings)
     return stats

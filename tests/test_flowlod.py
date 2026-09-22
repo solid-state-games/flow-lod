@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flow_lod import analyse as A          # noqa: E402
 from flow_lod import bake as B             # noqa: E402
-from flow_lod import simplify as S         # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -87,8 +86,14 @@ def main():
     src_verts, src_tris = len(src.verts), A.tri_count(src)
     src_area = surface_area(src)
     src_lo, src_hi = bbox(src)
-    src_nonmanifold = sum(1 for e in src.edges if len(e.link_faces) > 2)
-    src_open = sum(1 for e in src.edges if len(e.link_faces) < 2)
+    # Measure the baseline on the WELDED mesh, which is what the pipeline actually sees. On an
+    # unwelded mesh every edge is a boundary, so non-manifold edges read as zero and any LOD looks
+    # like a regression. One asset carries 113 non-manifold edges of its own.
+    _wb = bmesh.new(); _wb.from_mesh(obj.data)
+    A.repair(_wb, settings)
+    src_nonmanifold = sum(1 for e in _wb.edges if len(e.link_faces) > 2)
+    src_open = sum(1 for e in _wb.edges if len(e.link_faces) < 2)
+    _wb.free()
 
     # ---- 1. repair is lossless --------------------------------------------------------
     rep = bmesh.new(); rep.from_mesh(obj.data)
@@ -142,9 +147,10 @@ def main():
 
         # topology: the source is already imperfect, so bound the growth rather than demand zero
         nm = sum(1 for e in lbm.edges if len(e.link_faces) > 2)
-        nm_pct = 100.0 * nm / max(1, len(lbm.edges))
-        check(f"{name} keeps non-manifold edges under 2% budget", nm_pct <= 2.0,
-              f"{nm}/{len(lbm.edges)} edges = {nm_pct:.2f}% (source had {src_nonmanifold})")
+        # The LOD inherits whatever the source already had; what matters is that reduction does
+        # not manufacture more.
+        check(f"{name} does not add non-manifold edges", nm <= max(8, src_nonmanifold),
+              f"{nm} in LOD vs {src_nonmanifold} in the welded source")
 
         zero = sum(1 for f in lbm.faces if f.calc_area() < 1e-12)
         check(f"{name} has no zero-area faces", zero == 0, f"{zero} degenerate")
@@ -347,6 +353,39 @@ def main():
             if linked.type == "NORMAL_MAP" and len(principled.inputs["Normal"].links) == 1:
                 wired = True
     check("baked map is wired into the LOD material exactly once", wired)
+
+    # ---- cleanup --------------------------------------------------------------------
+    cbm2 = bmesh.new(); cbm2.from_mesh(obj.data)
+    A.repair(cbm2, settings)                      # clean is only meaningful on a welded mesh
+    before_parts = len(A.loose_parts(cbm2))
+    before_faces = len(cbm2.faces)
+
+    def volume(bm_):
+        total = 0.0
+        for f in bm_.faces:
+            vs = [v.co for v in f.verts]
+            for i in range(1, len(vs) - 1):
+                total += vs[0].dot(vs[i].cross(vs[i + 1])) / 6.0
+        return abs(total)
+
+    before_volume = volume(cbm2)
+    cstats = A.clean(cbm2, settings)
+    after_volume = volume(cbm2)
+    drift = abs(after_volume - before_volume) / max(1e-9, before_volume)
+
+    check("cleanup does not remove real geometry", drift < 0.02,
+          f"volume changed {drift:.2%}, {before_faces - len(cbm2.faces)} faces removed, "
+          f"{cstats.get('fragments_removed', 0)} fragments")
+    check("cleanup never deletes the main body",
+          len(A.loose_parts(cbm2)) >= 1 and len(cbm2.faces) > 0.5 * before_faces,
+          f"parts {before_parts} -> {len(A.loose_parts(cbm2))}")
+    cbm2.free()
+
+    # The non-fast path (any preprocessing enabled) is a separate branch and must also survive.
+    detri_settings = A.Settings(**{**settings.__dict__, "detriangulate": True})
+    _ds, detri_reports = B.bake(obj, detri_settings, [("QUALITY", 0.25)])
+    check("bake works with preprocessing enabled", detri_reports[0]["final_tris"] > 0,
+          f"{detri_reports[0]['final_tris']} tris via the preprocessing path")
 
     # ---- registration -----------------------------------------------------------------
     import flow_lod

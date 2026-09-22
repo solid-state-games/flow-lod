@@ -105,15 +105,18 @@ def main():
           f"{src_verts} -> {len(rep.verts)}")
 
     # ---- 2. quad recovery -------------------------------------------------------------
-    A.detriangulate(rep, settings)
-    an = A.analyse(rep, settings)
+    # Tris to Quads is opt-in now (it costs fidelity on smooth meshes), so ask for it explicitly
+    # when testing that it works.
+    quad_settings = A.Settings(**{**settings.__dict__, "detriangulate": True})
+    A.detriangulate(rep, quad_settings)
+    an = A.analyse(rep, quad_settings)
     quads = an.stats["quad_ratio"]
     check("de-triangulation recovers quad topology", quads > 0.5,
           f"quad ratio {quads:.1%}, longest chord {an.stats['chord_max']}")
     check("recovered chords are long enough to be real flow", an.stats["chord_max"] >= 8,
           f"max chord {an.stats['chord_max']}, mean {an.stats['chord_mean']:.1f}")
 
-    src_struct = structure_points(rep, settings)
+    src_struct = structure_points(rep, quad_settings)
     check("feature polylines were found", an.stats["polylines"] > 0,
           f"{an.stats['polylines']} polylines, {len(src_struct)} structure edges")
     floor = an.stats["structural_floor"]

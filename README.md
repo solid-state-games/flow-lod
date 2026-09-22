@@ -78,49 +78,53 @@ shape heuristics recover only 69.4% and fragment the flow.
 flags levels below it *before* baking. On the reference asset that floor is ~1,500 triangles, so a 611
 triangle level is flagged as unreachable rather than silently producing mush.
 
-## Honest status
+## What it actually is
 
-**The tris-to-quads recovery and the analysis are the parts that work.** The LOD generation
-currently loses to Blender's own Decimate modifier on smooth hulls, and by a wide margin.
+**A workflow around Blender's Decimate, not a replacement for it.**
 
-Measured on a smooth hard-surface hull, 8,168 tris, structure-fidelity F1 at matched counts:
+The reduction is done by Blender's own Decimate modifier, and FlowLOD's output is verified
+*identical* to doing weld-then-Decimate by hand. What the addon adds is everything around that: one
+click, per-level budgets, automatic repair, a `<Name>_LODs` collection, consistent naming, a
+structural-floor warning, glTF export and a headless CLI.
 
-| | 50% budget | 25% budget |
-|---|---|---|
-| FlowLOD | 76.6% | 61.6% |
-| **Blender Decimate** | **84.4%** | **75.8%** |
+This addon originally shipped its own pure-Python quadric simplifier. It was measured against
+Blender's and lost by 12-17 points at every budget while running 50x slower and missing targets
+outright. It is still in the tree behind `Engine: Python QEM` so the comparison stays reproducible,
+but nothing should use it.
 
-The likely cause is placement. FlowLOD uses **half-edge collapse** — the surviving vertex must be
-one of the two originals — which was chosen so UVs and colours are inherited rather than
-interpolated. Blender's Decimate solves for the error-minimising position instead. On a smooth
-curved surface that difference is large, because no original vertex sits where the simplified
-surface should pass.
+**Repair is the part that matters most, and it is done automatically.** A reference hull measured
+9,509 vertices; welding merged 5,423 of them, 57% of the mesh, with no change to its 8,168
+triangles. Meshes arrive from glTF/FBX round trips with vertices split for shading, and a
+simplifier cannot collapse across a split. FlowLOD detects this with an exact trial weld and only
+welds when there is something to merge.
 
-Four attempts to close the gap were measured. None beat the baseline except at 50%:
+Structure fidelity against a correctly welded reference:
 
-1. **Adaptive per-mesh feature threshold** — 76.6 / 77.3 / 78.0 across settings. Noise.
-2. **Triangle shape-quality guard** — kept, but slivers were never the problem (0.2% vs
-   Decimate's 0.8%).
-3. **Driving Decimate with all feature vertices protected** — 52% of the mesh frozen, stalls at
-   4,516 tris against a 4,084 target.
-4. **Selective protection** (junctions and hard boundaries only, 8% of vertices) — budgets now
-   reachable, and it needs `invert_vertex_group=True` because Blender's weights mean "decimate
-   here", not "protect here". Final scores against raw Decimate on the untouched source:
+| | 50% | 25% | 10% |
+|---|---|---|---|
+| FlowLOD | 90.3% | 76.0% | 47.8% |
+| weld then Decimate, by hand | 90.3% | 76.0% | 47.8% |
 
-| ratio | best FlowLOD | raw Decimate |
-|---|---|---|
-| 50% | **88.1%** | 84.4% |
-| 25% | 71.1% | **75.8%** |
-| 10% | 60.2% (misses budget) | **67.8%** |
+Identical, which is the point. Every budget is hit exactly, in about 0.1s per level.
 
-There is also an unexplained result worth recording: preprocessing that should be a no-op on an
-already-clean, already-triangulated mesh (weld at 1e-5 of bbox, triangulate zero faces) still
-diverges sharply from the raw baseline at aggressive ratios — recall 27% versus 78% at 10%. Until
-that is understood, the preprocessing is suspect at low budgets.
+### A trap worth knowing
 
-So use this today for **repair, tris-to-quads, and analysis**, and at moderate reduction where it
-wins. For aggressive reduction on smooth models, plain Decimate is better, and this README would
-rather say so than sell you something the measurements do not support.
+Decimating *without* welding first scores better on a crease metric (80.8% vs 76.0% at 25%). That is
+an artifact, not a win: an unwelded mesh has split vertices Decimate cannot collapse across, so it
+accidentally preserves creases while carrying more than twice the vertices for the same triangle
+count. Vertex count is what costs on the GPU and in a glTF file. Weld first.
+
+### Preprocessing is opt-in, because it is not free
+
+Every preprocessing stage costs some fidelity, so each is a switch and the defaults do the least:
+
+- **Weld** — on, auto-skipped when the mesh is already clean
+- **Tris to Quads** — off; recovers hidden quad flow, worth it when you want quads or chord
+  collapse, measurably costly on smooth meshes
+- **Chord collapse** — auto; on only for quad-modelled sources
+- **Cascade** — off; reducing each level from the previous compounds any loss down the ladder
+- **Protect strength** — 0; measured not to help, and at aggressive budgets it prevents the target
+  being reached at all
 
 ## What it does not do, measured
 

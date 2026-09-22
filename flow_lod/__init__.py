@@ -76,11 +76,12 @@ class FlowLODSettings(PropertyGroup):
 
     weld: BoolProperty(
         name="Weld First", default=True,
-        description="Merge split vertices. Exported meshes arrive shattered and nothing "
-                    "can simplify them until this runs",
+        description="Merge split vertices, automatically skipped when the mesh has none. "
+                    "Exported meshes arrive shattered and nothing can simplify them until "
+                    "this runs; clean meshes are left alone",
     )
     detriangulate: BoolProperty(
-        name="Tris to Quads", default=True,
+        name="Tris to Quads", default=False,
         description="Recover the quad topology a triangulated export hid, preserving edge flow, "
                     "before reducing. Measured to help at moderate budgets and hurt at "
                     "aggressive ones, so it is a switch",
@@ -91,6 +92,26 @@ class FlowLODSettings(PropertyGroup):
     protect_boundary: BoolProperty(name="Boundary", default=True)
     protect_curvature: BoolProperty(name="Curvature", default=True)
 
+    engine: EnumProperty(
+        name="Engine",
+        items=[
+            ("DECIMATE", "Decimate", "Blender's built-in collapse. Faster and measurably better"),
+            ("PYTHON", "Python QEM", "This addon's own half-edge collapse. Slower and worse; "
+                                     "kept so the comparison stays reproducible"),
+        ],
+        default="DECIMATE",
+        description="Which reduction engine does the work",
+    )
+    cascade: BoolProperty(
+        name="Cascade Levels", default=False,
+        description="Reduce each level from the previous one rather than from the source, so the "
+                    "ladder stays consistent as it descends",
+    )
+    protect_weight: FloatProperty(
+        name="Protect Strength", default=0.0, min=0.0, max=1000.0,
+        description="Influence of the protected-vertex group. 0 disables protection entirely",
+    )
+
     selective_protect: BoolProperty(
         name="Selective Protection", default=True,
         description="Protect only junctions where feature lines meet and hard boundaries "
@@ -98,7 +119,7 @@ class FlowLODSettings(PropertyGroup):
                     "Protecting half the mesh stops any simplifier reaching its budget",
     )
 
-    remark_sharp: BoolProperty(name="Re-mark Sharp", default=True)
+    remark_sharp: BoolProperty(name="Re-mark Sharp", default=False)
     transfer_normals: BoolProperty(
         name="Transfer Normals", default=False,
         description="Copy custom split normals from the source instead of re-deriving them",
@@ -134,6 +155,9 @@ def to_settings(props) -> "analyse.Settings":
         protect_boundary=props.protect_boundary,
         protect_curvature=props.protect_curvature,
         selective_protect=props.selective_protect,
+        engine=props.engine,
+        cascade=props.cascade,
+        protect_weight=props.protect_weight,
         remark_sharp=props.remark_sharp,
         transfer_normals=props.transfer_normals,
     )
@@ -307,6 +331,9 @@ class FLOWLOD_PT_panel(Panel):
         out.prop(props, "weld")
         out.prop(props, "detriangulate")
         out.prop(props, "selective_protect")
+        out.prop(props, "protect_weight")
+        out.prop(props, "engine")
+        out.prop(props, "cascade")
         out.prop(props, "remark_sharp")
         out.prop(props, "transfer_normals")
 

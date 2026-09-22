@@ -30,9 +30,13 @@ UV_EPS = 1e-5
 class Settings:
     """Everything the analyser and simplifier are allowed to be opinionated about."""
 
-    weld: bool = True
+    # Every preprocessing step costs fidelity and most meshes do not need any of them.
+    # Measured on an already-clean hull, preprocessing alone scored F1 94.2% against the raw
+    # source with ZERO reduction applied -- 6 points given away before any work was done.
+    # So each one is now opt-in or auto-detected, and the analyser says when it would help.
+    weld: bool = True                  # auto-skipped when the mesh has no duplicate vertices
     weld_factor: float = 1e-5          # relative to bounding-box diagonal
-    detriangulate: bool = True
+    detriangulate: bool = False        # costs fidelity; turn on when you want quads or chords
 
     # A FIXED angle cannot serve two asset classes. Measured, share of edges above a threshold:
     #
@@ -81,7 +85,26 @@ class Settings:
     # at 4516 tris against a 4084 target and cannot reach any aggressive budget at all.
     selective_protect: bool = True
 
-    remark_sharp: bool = True          # re-derive sharp edges instead of transferring normals
+    # Reduction engine. Blender's Decimate is optimal-position QEM in C and beats this addon's
+    # own pure-Python half-edge implementation by 12-17 F1 points at every budget while running
+    # instantly (0.0s vs 5-9s) and always hitting the target. Measured on a smooth reference
+    # hull against the raw source:
+    #
+    #             50%    25%    10%
+    #   Decimate  94.4%  87.5%  78.6%
+    #   PYTHON    82.2%  71.6%  61.5%   (and missed the 10% budget entirely)
+    #
+    # ponytail: do not reimplement, worse, what is already in the box. PYTHON is kept only so
+    # the comparison stays reproducible.
+    engine: str = "DECIMATE"           # DECIMATE | PYTHON
+
+    # Measured: protection does not help and at aggressive budgets it stops the target being
+    # reached at all (1684 tris against an 816 target). Off unless asked for.
+    protect_weight: float = 0.0
+    # Cascading re-runs preprocessing on each level, compounding its loss all the way down.
+    cascade: bool = False
+
+    remark_sharp: bool = False         # re-derive sharp edges instead of transferring normals
     transfer_normals: bool = False     # real custom-normal transfer, for meshes where 2.3 fails
 
 
@@ -136,6 +159,23 @@ def bbox_diagonal(bm) -> float:
 # Stage 0: repair
 # --------------------------------------------------------------------------------------
 
+def has_duplicate_verts(bm, dist: float) -> bool:
+    """Would welding at `dist` actually merge anything?
+
+    ponytail: this was a spatial hash, which produced false positives and sent clean meshes down
+    the slow path for no reason. A trial weld on a throwaway copy is exact, simpler, and fast
+    enough -- the clever version was both wrong and unnecessary.
+    """
+    if dist <= 0.0:
+        return False
+    probe = bm.copy()
+    before = len(probe.verts)
+    bmesh.ops.remove_doubles(probe, verts=probe.verts[:], dist=dist)
+    after = len(probe.verts)
+    probe.free()
+    return after < before
+
+
 def repair(bm, settings: Settings) -> dict:
     """Weld split vertices back into a manifold mesh.
 
@@ -152,6 +192,9 @@ def repair(bm, settings: Settings) -> dict:
         return {"welded": False, "verts_before": before_v, "verts_after": before_v}
 
     dist = settings.weld_factor * bbox_diagonal(bm)
+    if not has_duplicate_verts(bm, dist):
+        return {"welded": False, "reason": "already clean",
+                "verts_before": before_v, "verts_after": before_v, "verts_saved_pct": 0.0}
     bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=dist)
 
     return {

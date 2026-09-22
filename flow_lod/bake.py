@@ -11,8 +11,10 @@ import time
 import bmesh
 import bpy
 
-from .analyse import FEATURE, LOCKED, Settings, analyse, prepare, tri_count, quad_ratio
-from .simplify import simplify_to
+from .analyse import (
+    FEATURE, LOCKED, Settings, analyse, prepare, protect_vertices, tri_count, quad_ratio,
+)
+from .simplify import collapse_chords, simplify_to
 
 
 def resolve_target(mode: str, value: float, source_tris: int) -> int:
@@ -63,23 +65,144 @@ def _mark_sharp(bm, settings: Settings):
             e.smooth = False
 
 
-def bake_level(obj, target: int, settings: Settings, name: str):
+def _needs_no_prep(me, settings: Settings) -> bool:
+    """True when every preprocessing stage would be a no-op for this mesh and these settings."""
+    if settings.detriangulate or settings.use_chords == "ALWAYS":
+        return False
+    if settings.protect_weight > 0.0 or settings.remark_sharp:
+        return False
+    if any(len(p.vertices) > 3 for p in me.polygons):
+        return False
+    if settings.weld:
+        import bmesh as _bm
+        from .analyse import bbox_diagonal, has_duplicate_verts
+        probe = _bm.new()
+        probe.from_mesh(me)
+        dirty = has_duplicate_verts(probe, settings.weld_factor * bbox_diagonal(probe))
+        probe.free()
+        if dirty:
+            return False
+    return True
+
+
+def decimate_mesh(me, target: int, protect_idx, settings: Settings) -> tuple:
+    """Reduce a mesh datablock to `target` triangles with Blender's Decimate modifier.
+
+    The ratio is iterated because a protect group makes the achieved count undershoot the
+    requested one. Four passes is ample -- it converges in two on every mesh measured.
+
+    invert_vertex_group is REQUIRED: Blender reads a weight of 1 as "decimate here", not
+    "protect here". Without the inversion the modifier stalls far above the target.
+    """
+    tmp = bpy.data.objects.new("_flowlod_tmp", me)
+    bpy.context.scene.collection.objects.link(tmp)
+    if protect_idx and settings.protect_weight > 0.0:
+        vg = tmp.vertex_groups.new(name="FlowLOD_Protect")
+        vg.add(list(protect_idx), 1.0, "REPLACE")
+
+    current = sum(len(p.vertices) - 2 for p in me.polygons)
+    ratio = min(1.0, target / max(1, current))
+    result, achieved, passes = None, current, 0
+
+    for passes in range(1, 5):
+        tmp.modifiers.clear()
+        mod = tmp.modifiers.new("FlowLOD", "DECIMATE")
+        mod.decimate_type = "COLLAPSE"
+        mod.ratio = max(1e-6, min(1.0, ratio))
+        mod.use_collapse_triangulate = True
+        if protect_idx and settings.protect_weight > 0.0:
+            mod.vertex_group = "FlowLOD_Protect"
+            mod.vertex_group_factor = settings.protect_weight
+            mod.invert_vertex_group = True
+
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = bpy.data.meshes.new_from_object(tmp.evaluated_get(depsgraph))
+        achieved = sum(len(p.vertices) - 2 for p in evaluated.polygons)
+        if result is not None:
+            bpy.data.meshes.remove(result)
+        result = evaluated
+        if achieved <= target * 1.02:
+            break
+        ratio *= (target / max(1, achieved)) * 0.98
+
+    bpy.data.objects.remove(tmp)
+    return result, {"engine": "decimate", "passes": passes, "achieved": achieved}
+
+
+def bake_level(obj, target: int, settings: Settings, name: str, source_mesh=None):
     """Build one LOD object. Returns (object, report)."""
     t0 = time.time()
 
+    base = source_mesh if source_mesh is not None else obj.data
+
+    # Fast path: when nothing needs preprocessing, hand the untouched mesh straight to Decimate.
+    # A bmesh round trip is not free -- measured, it costs several F1 points on an already-clean
+    # mesh -- so the cheapest correct thing is to not do one.
+    if settings.engine == "DECIMATE" and _needs_no_prep(base, settings):
+        me, dec = decimate_mesh(base.copy(), target, None, settings)
+        me.name = name
+        lod = bpy.data.objects.new(name, me)
+        lod.matrix_world = obj.matrix_world.copy()
+        for slot in obj.material_slots:
+            me.materials.append(slot.material)
+        final = sum(len(p.vertices) - 2 for p in me.polygons)
+        return lod, {
+            "target": target, "start_tris": sum(len(p.vertices) - 2 for p in base.polygons),
+            "tiers": [("decimate-direct", dec)], "chords_used": False, "protected": 0,
+            "deepest_tier": 0, "deepest_tier_name": "decimate-direct",
+            "final_tris": final, "final_verts": len(me.vertices), "quad_ratio": 0.0,
+            "hit_budget": final <= target * 1.02, "prepare": {"skipped": True},
+            "seconds": time.time() - t0,
+        }
+
     bm = bmesh.new()
-    bm.from_mesh(obj.data)
+    bm.from_mesh(base)
     was_quad = quad_ratio(bm) >= settings.quad_skip_ratio
     prep = prepare(bm, settings)
-    report = simplify_to(bm, settings, target, source_was_quad_dominant=was_quad)
 
-    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
-    if settings.remark_sharp:
-        _mark_sharp(bm, settings)
+    if settings.engine == "PYTHON":
+        report = simplify_to(bm, settings, target, source_was_quad_dominant=was_quad)
+        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+        if settings.remark_sharp:
+            _mark_sharp(bm, settings)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me)
+        bm.free()
+    else:
+        # Optional structured pass first: whole quad rows are the most modeller-like reduction
+        # available, and they are nearly free. Decimate finishes the job.
+        report = {"target": target, "start_tris": tri_count(bm), "tiers": []}
+        chords_on = settings.use_chords == "ALWAYS" or (
+            settings.use_chords == "AUTO" and was_quad
+        )
+        report["chords_used"] = chords_on
+        if chords_on:
+            floor = max(target, int(report["start_tris"] * settings.chord_floor))
+            if tri_count(bm) > floor:
+                r = collapse_chords(bm, settings, floor, whole_only=False)
+                if r["rows_collapsed"]:
+                    report["tiers"].append(("chord-segment", r))
 
-    me = bpy.data.meshes.new(name)
-    bm.to_mesh(me)
-    bm.free()
+        an = analyse(bm, settings)
+        protect = protect_vertices(bm, an.edge_class, settings)
+        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+        if settings.remark_sharp:
+            _mark_sharp(bm, settings)
+        staged = bpy.data.meshes.new(name + "_stage")
+        bm.to_mesh(staged)
+        bm.free()
+
+        me, dec = decimate_mesh(staged, target, protect, settings)
+        me.name = name
+        bpy.data.meshes.remove(staged)
+        report["tiers"].append(("decimate", dec))
+        report["protected"] = len(protect)
+        report["deepest_tier"] = 0
+        report["deepest_tier_name"] = "decimate"
+        report["final_tris"] = sum(len(p.vertices) - 2 for p in me.polygons)
+        report["final_verts"] = len(me.vertices)
+        report["quad_ratio"] = 0.0
+        report["hit_budget"] = report["final_tris"] <= target * 1.02
 
     lod = bpy.data.objects.new(name, me)
     lod.matrix_world = obj.matrix_world.copy()
@@ -108,10 +231,15 @@ def bake(obj, settings: Settings, levels) -> list:
             bpy.data.objects.remove(old)
 
     reports = []
+    previous = None
     for i, (mode, value) in enumerate(levels, start=1):
         target = resolve_target(mode, value, stats["raw_tris"])
         name = f"{obj.name}_LOD{i}"
-        lod, report = bake_level(obj, target, settings, name)
+        # Cascade: reduce the previous level rather than the source. Cheaper, and each level is
+        # a strict subset of the one above it, so the ladder stays consistent as it descends.
+        source_mesh = previous if (settings.cascade and previous is not None) else None
+        lod, report = bake_level(obj, target, settings, name, source_mesh=source_mesh)
+        previous = lod.data
         coll.objects.link(lod)
 
         if settings.remark_sharp:

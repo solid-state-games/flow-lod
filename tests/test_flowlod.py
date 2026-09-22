@@ -426,6 +426,25 @@ def main():
     check("full sphere directions span more than a hemisphere", spread > math.radians(150),
           f"widest separation {math.degrees(spread):.0f} degrees")
 
+    # The one that actually matters: our encode must be the exact inverse of the shader's decode,
+    # or the card samples a different cell than the one we rendered. grid_from_direction_godot is
+    # a transcription of the shader's VecToSphereOct / VecToHemiSphereOct.
+    for full in (True, False):
+        worst = 0.0
+        for i in range(16):
+            for j in range(16):
+                u, v = (i + 0.5) / 16, (j + 0.5) / 16
+                gx, gz = I.grid_from_direction_godot(I.octa_direction_godot(u, v, full), full)
+                if full:
+                    ru, rv = gx * 0.5 + 0.5, gz * 0.5 + 0.5
+                else:
+                    x, z = (gx - gz) / 2.0, (gx + gz) / 2.0
+                    ru, rv = (x + z + 1.0) / 2.0, (z - x + 1.0) / 2.0
+                worst = max(worst, abs(ru - u), abs(rv - v))
+        label = "full sphere" if full else "hemisphere"
+        check(f"atlas encoding inverts the shader's decode ({label})", worst < 1e-5,
+              f"worst round-trip error {worst:.2e}")
+
     # ---- registration -----------------------------------------------------------------
     import flow_lod
     try:

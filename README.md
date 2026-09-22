@@ -110,8 +110,9 @@ a final level: a two-triangle card that samples an N x N atlas of pre-rendered v
 between neighbours as the camera moves.
 
 The format follows [Godot-Octahedral-Impostors](https://github.com/wojtekpil/Godot-Octahedral-Impostors)
-(MIT) rather than inventing one: a 16x16 grid by default, `base` for albedo and `norm_depth` for
-camera-space normals, with frame count and sphere mode stored as custom properties on the card.
+(MIT) rather than inventing one. Four textures are written, matching that shader's uniforms:
+`albedo` (alpha carries the mask), `normal`, `depth` (read from red) and, not yet implemented,
+`orm`. Frame count and sphere mode are stored as custom properties on the card.
 
 **Full Sphere** is on by default. Ships are seen from below; foliage is not, and turning it off
 spends the whole atlas on the upper hemisphere for better side resolution.
@@ -120,21 +121,18 @@ The atlas is produced in a single render. Rather than 256 renders, the mesh is i
 grid with each copy rotated to its cell's view direction. A 16x16 atlas at 2048px takes about two
 seconds.
 
-### What is not finished
+The encoding is a transcription of that shader's own `OctaSphereEnc` and `OctaHemiSphereEnc`, and a
+test asserts our encode is the exact inverse of its decode (worst round-trip error 3e-08). Without
+that the card samples a different cell than the one rendered, and no amount of shader tuning fixes
+it.
 
-Being straight about this one, because it looks more complete than it is:
+### Known gaps
 
-* **It has not been tested in Godot.** The mapping is verified mathematically (unit directions,
-  full sphere reaches z -0.97, hemisphere stays above the horizon) but never against the actual
-  shader, which is the only proof that matters.
-* **Depth is not packed.** The file is called `norm_depth` by convention but its alpha holds
-  coverage, not depth. Without depth the shader cannot do parallax, so cards will look flat at the
-  edges.
-* **No ORM map.** Godot's Light shader variant accepts base and normals alone, so this is usable,
-  but the Standard variant wants occlusion, roughness and metallic packed together.
-* **One corner cell rendered black** in an 8x8 test. All four corners map to the same pole and the
-  rotations check out, so the atlas layout and the render disagree somewhere and I have not found
-  where.
+* **No ORM map.** The shader defaults that sampler to white, so the output is usable, but occlusion,
+  roughness and metallic are not baked.
+* **Upstream is Godot 3.** The reference addon does not compile in Godot 4 or Redot without porting
+  (`hint_color`, `hint_albedo`, `CAMERA_MATRIX`, `ALPHA_SCISSOR` and the `1f` literal suffix all
+  changed). It is MIT, so porting is permitted, but FlowLOD does not ship a shader.
 
 ## Options that cost something
 

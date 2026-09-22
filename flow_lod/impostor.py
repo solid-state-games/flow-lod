@@ -20,30 +20,59 @@ import bpy
 from mathutils import Matrix, Vector
 
 
-def octa_direction(u: float, v: float, full_sphere: bool) -> Vector:
-    """Map a cell coordinate in [0,1]^2 to a view direction.
+def octa_direction_godot(u: float, v: float, full_sphere: bool) -> Vector:
+    """Cell coordinate in [0,1]^2 to a view direction in GODOT space (Y up).
 
-    Full sphere uses the standard octahedral fold, which covers every angle including below.
-    Hemisphere uses the hemi-octahedron, which spends the whole atlas on the upper half and so
-    resolves side views better. Foliage wants hemisphere; anything seen from underneath, like a
-    ship in space, wants the full sphere.
+    These are transcriptions of `OctaSphereEnc` and `OctaHemiSphereEnc` from
+    Godot-Octahedral-Impostors, so the atlas matches its shader by construction rather than by
+    hope. The shader folds on Y and reads the grid from XZ; Blender is Z up, so an earlier version
+    of this built the atlas in the wrong frame entirely.
     """
-    x = u * 2.0 - 1.0
-    y = v * 2.0 - 1.0
+    if full_sphere:
+        x = (u - 0.5) * 2.0
+        z = (v - 0.5) * 2.0
+        y = 1.0 - abs(x) - abs(z)
+        if y < 0.0:
+            ax, az = abs(x), abs(z)
+            x, z = math.copysign(1.0, x) * (1.0 - az), math.copysign(1.0, z) * (1.0 - ax)
+        return Vector((x, y, z)).normalized()
 
-    if not full_sphere:
-        # hemi-octahedron: rotate the square 45 degrees, z stays positive
-        hx = (x + y) * 0.5
-        hy = (x - y) * 0.5
-        return Vector((hx, hy, 1.0 - abs(hx) - abs(hy))).normalized()
-
-    z = 1.0 - abs(x) - abs(y)
-    if z < 0.0:
-        x, y = (1.0 - abs(y)) * math.copysign(1.0, x), (1.0 - abs(x)) * math.copysign(1.0, y)
+    x = u - v
+    z = -1.0 + u + v
+    y = 1.0 - abs(x) - abs(z)
     return Vector((x, y, z)).normalized()
 
 
-def _capture_material(name: str, mode: str, far: float):
+def godot_to_blender(direction: Vector) -> Vector:
+    """Godot (Y up, -Z forward) to Blender (Z up, -Y forward)."""
+    return Vector((direction.x, -direction.z, direction.y))
+
+
+def octa_direction(u: float, v: float, full_sphere: bool) -> Vector:
+    """Cell coordinate to a view direction in Blender space."""
+    return godot_to_blender(octa_direction_godot(u, v, full_sphere))
+
+
+def grid_from_direction_godot(direction: Vector, full_sphere: bool):
+    """The shader's `VecToSphereOct` / `VecToHemiSphereOct`, for round-trip verification."""
+    d = direction.copy()
+    if not full_sphere:
+        d.y = max(d.y, 0.001)
+        d.normalize()
+        total = abs(d.x) + abs(d.y) + abs(d.z)
+        o = d / total
+        return (o.x + o.z, o.z - o.x)
+
+    octant = Vector((math.copysign(1.0, d.x), math.copysign(1.0, d.y), math.copysign(1.0, d.z)))
+    total = d.dot(octant)
+    o = d / total
+    if o.y < 0.0:
+        a = Vector((abs(o.x), abs(o.y), abs(o.z)))
+        o.x, o.z = octant.x * (1.0 - a.z), octant.z * (1.0 - a.x)
+    return (o.x, o.z)
+
+
+def _capture_material(name: str, mode: str, far):
     """A material that renders normals or depth as colour, for use as a view-layer override."""
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -67,11 +96,21 @@ def _capture_material(name: str, mode: str, far: float):
         tree.links.new(xf.outputs["Vector"], mul.inputs[0])
         tree.links.new(mul.outputs["Vector"], emit.inputs["Color"])
     else:
+        # The shader offsets UVs by (0.5 - depth.r), so the card plane must sit at 0.5 and the
+        # surface deviate either side of it. `far` carries the centre distance and radius packed
+        # as (centre, radius).
+        centre, radius = far
         cam = tree.nodes.new("ShaderNodeCameraData")
+        sub = tree.nodes.new("ShaderNodeMath"); sub.operation = "SUBTRACT"
+        sub.inputs[1].default_value = centre
         div = tree.nodes.new("ShaderNodeMath"); div.operation = "DIVIDE"
-        div.inputs[1].default_value = max(1e-6, far)
-        tree.links.new(cam.outputs["View Z Depth"], div.inputs[0])
-        tree.links.new(div.outputs["Value"], emit.inputs["Color"])
+        div.inputs[1].default_value = max(1e-6, radius * 2.0)
+        add = tree.nodes.new("ShaderNodeMath"); add.operation = "ADD"
+        add.inputs[1].default_value = 0.5
+        tree.links.new(cam.outputs["View Z Depth"], sub.inputs[0])
+        tree.links.new(sub.outputs["Value"], div.inputs[0])
+        tree.links.new(div.outputs["Value"], add.inputs[0])
+        tree.links.new(add.outputs["Value"], emit.inputs["Color"])
 
     return mat
 
@@ -132,7 +171,16 @@ def bake_impostor(obj, settings, directory: str) -> dict:
     saved = (scene.render.engine, scene.render.resolution_x, scene.render.resolution_y,
              scene.render.filepath, scene.camera, scene.render.film_transparent)
 
+    # The source sits at the world origin, which is exactly where cell (0,0) lands. Left visible
+    # it renders into that one cell with its own material, which under EEVEE with no lamps is
+    # solid black. Everything else in the scene has to go too.
+    hidden_state = [(o, o.hide_render) for o in bpy.data.objects if o.type in {"MESH", "CURVE"}]
+    for other, _ in hidden_state:
+        other.hide_render = True
+
     copies = _grid_of_views(obj, grid, full_sphere, spacing)
+    for copy in copies:
+        copy.hide_render = False
 
     cam_data = bpy.data.cameras.new("_impostor_cam")
     cam_data.type = "ORTHO"
@@ -152,9 +200,15 @@ def bake_impostor(obj, settings, directory: str) -> dict:
     outputs = {}
     # Albedo comes from Workbench with flat lighting, which renders textures unlit. EEVEE with no
     # lamps renders the object black, which is what a first attempt here produced.
+    # Four separate textures, matching the shader's uniforms. An earlier version emitted a single
+    # "norm_depth" file on the assumption that depth rode in alpha; the shader actually reads
+    # depth from the RED channel of its own texture, and takes the mask from albedo's alpha.
+    centre_distance = radius * 4.0
     passes = (
-        ("base", "BLENDER_WORKBENCH", None),
-        ("norm_depth", eevee, _capture_material("_impostor_normal", "NORMAL", radius * 8.0)),
+        ("albedo", "BLENDER_WORKBENCH", None),
+        ("normal", eevee, _capture_material("_impostor_normal", "NORMAL", None)),
+        ("depth", eevee, _capture_material("_impostor_depth", "DEPTH",
+                                           (centre_distance, radius))),
     )
     for suffix, engine, override in passes:
         scene.render.engine = engine
@@ -179,6 +233,11 @@ def bake_impostor(obj, settings, directory: str) -> dict:
 
     for copy in copies:
         bpy.data.objects.remove(copy)
+    for other, was_hidden in hidden_state:
+        try:
+            other.hide_render = was_hidden
+        except ReferenceError:
+            pass
     bpy.data.objects.remove(cam)
     bpy.data.cameras.remove(cam_data)
 
@@ -192,6 +251,11 @@ def bake_impostor(obj, settings, directory: str) -> dict:
         "full_sphere": full_sphere,
         "resolution": resolution,
         "files": outputs,
+        "shader_params": {
+            "imposterFrames": [grid, grid],
+            "isFullSphere": full_sphere,
+            "textures": {"albedo": "albedo", "normal": "normal", "depth": "depth"},
+        },
         "card": card.name if card else None,
     }
 
@@ -217,7 +281,7 @@ def _build_card(obj, radius: float, grid: int, full_sphere: bool, outputs: dict)
 
     mat = bpy.data.materials.new(f"{obj.name}_impostor")
     mat.use_nodes = True
-    base = outputs.get("base")
+    base = outputs.get("albedo")
     if base and not str(base).startswith("failed"):
         tree = mat.node_tree
         tex = tree.nodes.new("ShaderNodeTexImage")

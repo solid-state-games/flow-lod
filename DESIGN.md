@@ -689,11 +689,28 @@ Next silently ignores `view_layer.material_override`, which made a constant red 
 black; the fix is object-linked material slots on the throwaway copies, which override the mesh's
 materials without touching the shared mesh.
 
-**Unfinished, and stated as such in the README.** Depth is not packed into the normal atlas, so
-there is no parallax. There is no ORM map. One corner cell rendered black in an 8x8 test while all
-four corners map to the same pole with valid rotations, so the layout and the render disagree
-somewhere. And none of it has been run against the actual Godot shader, which is the only test that
-would settle whether the cell-to-direction correspondence is right.
+**Reading the shader settled three things guesswork had got wrong.**
+
+*The atlas was built in the wrong frame.* The shader folds on Y and reads the grid from XZ; the
+first implementation folded on Z and read XY, because Blender is Z up and Godot is Y up. Directions
+are now computed by transcribing `OctaSphereEnc` and `OctaHemiSphereEnc`, then converted to Blender
+space for camera placement. A test asserts the encode is the exact inverse of the shader's decode,
+worst error 3e-08, for both sphere modes. Nothing short of that check would have caught it: the
+atlas looked perfectly plausible.
+
+*Depth is its own texture, not packed in alpha.* The shader reads depth from the RED channel of
+`imposterTextureDepth` and takes the mask from albedo's alpha. Four textures are written now, and
+depth is remapped so the card plane sits at 0.5, which is what the shader's `(0.5 - depth.r)`
+parallax offset expects. Measured range on a test asset: 0.278 to 0.749.
+
+*One cell was black because the source was still in the scene.* Cell (0,0) lands at the world
+origin, exactly where the source object sits. Under EEVEE with no lamps its real material renders
+solid black, overlapping that one cell in the normal pass only. Everything is hidden during the
+atlas render now.
+
+Verified in Redot 26.2: the ported shader compiles, loads all three textures, and the card selects
+visibly different frames as the camera orbits. Still missing: an ORM map, and a pixel comparison
+against the source mesh from matching angles.
 
 ## 11. Scope
 

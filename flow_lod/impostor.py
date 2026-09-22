@@ -43,6 +43,25 @@ def octa_direction_godot(u: float, v: float, full_sphere: bool) -> Vector:
     return Vector((x, y, z)).normalized()
 
 
+def frame_basis_godot(direction: Vector):
+    """The shader's per-frame basis, transcribed.
+
+        vec3 up = vec3(0,1,0);
+        if (abs(z.y) > 0.999) up = vec3(0,0,-1);
+        x = normalize(cross(up, z));
+        y = normalize(cross(x, z));
+
+    Every cell has to be rendered with this exact in-plane orientation. Using any convenient
+    rotation instead, such as the minimal one between two vectors, gives each cell an arbitrary
+    roll and the card shows the right shape at the wrong angle.
+    """
+    z = direction.normalized()
+    up = Vector((0.0, 0.0, -1.0)) if abs(z.y) > 0.999 else Vector((0.0, 1.0, 0.0))
+    x = up.cross(z).normalized()
+    y = x.cross(z).normalized()
+    return x, y, z
+
+
 def godot_to_blender(direction: Vector) -> Vector:
     """Godot (Y up, -Z forward) to Blender (Z up, -Y forward)."""
     return Vector((direction.x, -direction.z, direction.y))
@@ -63,7 +82,12 @@ def grid_from_direction_godot(direction: Vector, full_sphere: bool):
         o = d / total
         return (o.x + o.z, o.z - o.x)
 
-    octant = Vector((math.copysign(1.0, d.x), math.copysign(1.0, d.y), math.copysign(1.0, d.z)))
+    # GLSL sign(0.0) is 0.0, where Python's copysign(1.0, 0.0) is +1.0. That difference only
+    # shows up for exactly axis-aligned directions, and it changes which cell the shader picks.
+    def glsl_sign(value):
+        return 0.0 if value == 0.0 else math.copysign(1.0, value)
+
+    octant = Vector((glsl_sign(d.x), glsl_sign(d.y), glsl_sign(d.z)))
     total = d.dot(octant)
     o = d / total
     if o.y < 0.0:
@@ -118,18 +142,21 @@ def _capture_material(name: str, mode: str, far):
 def _grid_of_views(obj, grid: int, full_sphere: bool, spacing: float):
     """Instance the object once per atlas cell, each rotated to that cell's view direction."""
     made = []
-    target = Vector((0.0, 0.0, 1.0))                 # the camera looks along -Z from above
     for j in range(grid):
         for i in range(grid):
             u = (i + 0.5) / grid
             v = (j + 0.5) / grid
-            direction = octa_direction(u, v, full_sphere)
+            gx, gy, gz = frame_basis_godot(octa_direction_godot(u, v, full_sphere))
+            bx, by, bz = (godot_to_blender(gx), godot_to_blender(gy), godot_to_blender(gz))
+            # Rows, so the matrix sends bx to +X, by to +Y and bz to +Z: the camera looks down -Z
+            # with +X right and +Y up, which is the shader's x, y and view direction.
+            rotation = Matrix((bx, by, bz)).to_4x4()
             copy = obj.copy()
             copy.data = obj.data
             bpy.context.scene.collection.objects.link(copy)
             copy.matrix_world = (
                 Matrix.Translation(Vector((i * spacing, j * spacing, 0.0)))
-                @ direction.rotation_difference(target).to_matrix().to_4x4()
+                @ rotation
                 @ Matrix.Translation(-_centre(obj))
             )
             made.append(copy)

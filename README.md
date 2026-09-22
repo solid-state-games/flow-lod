@@ -126,26 +126,26 @@ test asserts our encode is the exact inverse of its decode (worst round-trip err
 that the card samples a different cell than the one rendered, and no amount of shader tuning fixes
 it.
 
-### Status: not working end to end
+### Status: partly working
 
-The atlas renders, the shader loads it, and the card picks different frames as the camera moves. But
-a comparison against the source mesh from matching angles does **not** line up. At a camera on Godot
-+X the mesh shows a long horizontal profile and the impostor shows a short upright one, roughly 90
-degrees out.
+Tested against the reference shader in Redot 26.2. The atlas loads, the card selects frames by view
+angle, and after fixing the frame basis three of four test angles line up with the source mesh.
 
-What is proven and what is not:
+**The bug that mattered:** each cell was being rendered with an arbitrary roll about its view axis.
+The shader builds a specific per-frame basis (`up = (0,1,0)`, `x = cross(up, z)`, `y = cross(x, z)`)
+and the renderer now transcribes it. Before the fix nothing matched; after it, most angles do.
 
-* **Proven.** Our cell-to-direction encoding is the exact inverse of the shader's decode, worst
-  round-trip error 3e-08, asserted in the test suite for both sphere modes.
-* **Not proven.** That the Blender camera direction used to render a cell corresponds to the Godot
-  direction the shader computes for it. That conversion, Godot `(x, y, z)` to Blender `(x, -z, y)`,
-  is the prime suspect. A wrong axis convention there produces exactly this symptom: internally
-  consistent, externally rotated.
-* **Also possible.** The test harness is a hand-built scene rather than the addon's own impostor
-  node, and the shader may expect setup it is not getting.
+**Still wrong:** directions exactly on an axis, and the three-frame blend ghosts off-axis. Two known
+causes, neither yet fixed:
 
-The cheapest way to settle it is to place a Godot camera at a known direction, read back which
-atlas cell the shader samples, and compare with the cell that direction was rendered into.
+* GLSL `sign(0.0)` returns 0 where Python returns +1, so for a camera exactly on an axis the shader
+  folds to a different cell than the one rendered. The verification helper now matches GLSL; the
+  renderer's behaviour at those directions is still unconfirmed.
+* The test harness is a bare quad, not the addon's impostor node, and ignores `scale` and
+  `aabb_max`. The impostor renders visibly smaller than the reference, which is harness, not atlas.
+
+Treat the impostor as unfinished. Everything else in this addon is tested against real geometry;
+this is the one feature whose end-to-end behaviour is not.
 
 ### Other gaps
 

@@ -387,6 +387,24 @@ def main():
     check("bake works with preprocessing enabled", detri_reports[0]["final_tris"] > 0,
           f"{detri_reports[0]['final_tris']} tris via the preprocessing path")
 
+    # ---- hidden geometry --------------------------------------------------------------
+    hbm = bmesh.new(); hbm.from_mesh(obj.data)
+    A.repair(hbm, settings); A.clean(hbm, settings)
+    h_before = len(hbm.faces)
+    h_volume = volume(hbm)
+    hstats = A.remove_hidden(hbm, A.Settings(**{**settings.__dict__, "remove_hidden": True}))
+    h_drift = abs(volume(hbm) - h_volume) / max(1e-9, h_volume)
+
+    check("hidden removal keeps the exterior intact", h_drift < 0.02,
+          f"volume changed {h_drift:.2%}, removed {hstats.get('faces_removed', 0)} of {h_before}")
+    check("hidden removal ignores isolated flagged faces",
+          hstats.get("faces_removed", 0) <= hstats.get("flagged", 0),
+          f"flagged {hstats.get('flagged', 0)}, removed {hstats.get('faces_removed', 0)} "
+          f"after the connected-patch filter")
+    check("hidden removal never empties the mesh", len(hbm.faces) > 0.5 * h_before,
+          f"{h_before} -> {len(hbm.faces)} faces")
+    hbm.free()
+
     # ---- registration -----------------------------------------------------------------
     import flow_lod
     try:

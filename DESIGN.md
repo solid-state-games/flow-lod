@@ -644,6 +644,35 @@ Measured before the cut: 26% of every `analyse()` call computed results nothing 
 The audit also surfaced a gap rather than a cut. The `clean` stage had a `Settings` field and no UI
 property, so it could not be turned off from the panel.
 
+### 10d. Hidden geometry
+
+Generated meshes carry internal shells. The first measurement of this used a visibility sweep,
+rays fired inward from viewpoints around the model, and reported 9% to 46% of faces unreachable.
+That number was wrong in a dangerous direction: a face deep in an intake is never hit by a ray from
+outside, yet it is plainly visible through the opening.
+
+Exposure is the right signal, and it is MeshLab's trick: ambient occlusion used as a visibility
+test rather than as shading. A face on an internal shell can never see the sky from any angle. This
+implementation works per FACE; MeshLab's own documentation notes that judging per vertex can remove
+a visible face that happens to have hidden vertices.
+
+Measured against a ground-truth visibility sweep on the worst asset:
+
+| configuration | deleted | of which visible |
+|---|---|---|
+| 32 rays | 1,549 | 88 (5.7%) |
+| 32 rays, patch >= 8 | 1,264 | 43 (3.4%) |
+| 128 rays | 1,218 | 58 (4.8%) |
+| **128 rays, patch >= 8** | **942** | **22 (2.3%)** |
+
+Sampling cannot drive this to zero, so two things bound the risk instead. Interior geometry forms
+connected shells, so an isolated flagged face is treated as noise rather than a shell; one clean
+asset flagged 2 faces and removed none. And the operation runs on the LOD copy while the normal map
+bakes from the original, so anything wrongly removed returns as shading detail.
+
+Honest measured yield after cleaning: 7.5% on the dirtiest asset, 0% on the cleanest. The earlier
+46% figure was an artifact of the wrong metric.
+
 ## 11. Scope
 
 **In, v1:** weld repair · quad recovery · feature + chord analysis · three-tier simplification ·

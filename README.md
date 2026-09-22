@@ -40,6 +40,7 @@ Exits non-zero if a level missed its budget, so it can gate a build.
 |---|---|
 | **Repair** | Welds split vertices. Exported meshes arrive shattered and nothing can simplify them until this runs. |
 | **Clean** | Removes orphan fragments, fixes inconsistent normals, drops degenerate faces. |
+| **Remove Hidden** | Deletes interior geometry no ray can reach from outside. Opt-in. |
 | **Reduce** | Blender's Decimate, driven to your budget. |
 | **Symmetry** | Detects the mirror axis and can enforce it exactly. |
 | **Bake** | Projects the source onto each LOD as a normal map. |
@@ -84,6 +85,23 @@ symmetry. Two percent drift usually means the source wants fixing, not the LOD.
 decimation preserves the UV layout, so LODs still address your original texture set. The source's
 own normal map composites into the bake.
 
+## Remove Hidden
+
+Generated meshes carry internal shells nothing can ever see. Measured across four assets, between
+0% and 12% of faces after cleaning, and one carried 942 such faces.
+
+FlowLOD casts hemisphere rays from every face and deletes those from which nothing escapes. This is
+MeshLab's ambient-occlusion trick applied per face rather than per vertex, because judging by vertex
+can delete a visible face that happens to have hidden vertices.
+
+Sampling cannot make it provably safe. Against a ground-truth visibility sweep, 32 rays wrongly flag
+5.7% of what they delete; 128 rays plus a minimum connected patch of 8 faces brings that to 2.3%.
+Both are the defaults. Isolated flagged faces are treated as sampling noise, which is why one asset
+flagged 2 faces and removed none.
+
+The residual risk is bounded by where it runs. FlowLOD never modifies your source, and the normal
+map is baked from the original, so a wrongly removed sliver comes back in the bake.
+
 ## Options that cost something
 
 All off by default:
@@ -109,7 +127,7 @@ All off by default:
 blender -b ASSET.blend --factory-startup -P tests/test_flowlod.py
 ```
 
-52 checks against real geometry. No mocks. The mesh is the fixture.
+55 checks against real geometry. No mocks. The mesh is the fixture.
 
 ## Origins
 

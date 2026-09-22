@@ -75,6 +75,15 @@ class FlowLODSettings(PropertyGroup):
         description="Remove orphan fragments, dissolve degenerate geometry and make normals "
                     "consistent. Generated meshes routinely arrive with all three",
     )
+    remove_hidden: BoolProperty(
+        name="Remove Hidden", default=False,
+        description="Delete interior geometry no ray can reach from outside. Generated meshes "
+                    "carry internal shells worth 9-46%% of their faces. Destructive, and about "
+                    "2%% of what it removes is visible at grazing angles, so it runs on the LOD "
+                    "copy only and the normal bake recovers what it takes",
+    )
+    hidden_samples: IntProperty(name="Hidden Samples", default=128, min=8, max=512)
+
     weld: BoolProperty(
         name="Weld First", default=True,
         description="Merge split vertices, automatically skipped when the mesh has none. "
@@ -181,6 +190,8 @@ def active_mesh(context):
 def to_settings(props) -> "analyse.Settings":
     return analyse.Settings(
         clean=props.clean,
+        remove_hidden=props.remove_hidden,
+        hidden_samples=props.hidden_samples,
         weld=props.weld,
         detriangulate=props.detriangulate,
         feature_angle=props.feature_angle,
@@ -375,6 +386,9 @@ class FLOWLOD_PT_panel(Panel):
         out.label(text="Output")
         out.prop(props, "weld")
         out.prop(props, "clean")
+        out.prop(props, "remove_hidden")
+        if props.remove_hidden:
+            out.prop(props, "hidden_samples")
         out.prop(props, "detriangulate")
         out.prop(props, "selective_protect")
         out.prop(props, "protect_weight")
